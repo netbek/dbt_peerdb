@@ -1,5 +1,5 @@
 {% macro synced_at_gt_predicate(datetime) -%}
-    {{ adapter.dispatch('synced_at_gt_predicate', 'dbt_audit')(datetime) }}
+    {{ adapter.dispatch('synced_at_gt_predicate', 'dbt_peerdb')(datetime) }}
 {%- endmacro %}
 
 
