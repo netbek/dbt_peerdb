@@ -7,7 +7,7 @@
     ```yaml
     packages:
       - package: https://github.com/netbek/dbt_peerdb
-        version: 0.0.2
+        version: 0.0.3
     ```
 
 2. Configure the package in your `dbt_project.yml`:
