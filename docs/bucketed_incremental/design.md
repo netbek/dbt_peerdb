@@ -147,7 +147,7 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | `partition_by` | No | – | Passed to `validate_incremental_strategy` |
 | `engine`, `order_by`, `contract`, `grants`, `indexes`, `docs` | No | – | Standard DDL and lifecycle configs; unchanged by this materialization |
 
-The profile needs `use_lw_deletes: true` and the server needs `allow_nondeterministic_mutations=1`. Without the profile opt-in the adapter resolves the default strategy to `legacy`, which the materialization rejects.
+The profile needs `use_lw_deletes: true`. Without the opt-in the adapter resolves the default strategy to `legacy`, which the materialization rejects. The adapter must also be able to enable `allow_nondeterministic_mutations` for its session; a user constrained against `SET` needs the setting in its profile. ClickHouse enforces the setting only on Replicated engines, where it rejects the delete's `IN (SELECT ...)` predicate.
 
 ## Error reference
 
@@ -207,7 +207,7 @@ Every message carries the `bucketed_incremental:` prefix.
 
 **Rationale.** The bucket contract assumes one stable key per row, and the incremental recovery contract assumes a delete+insert watermark. `legacy`, `append` and `insert_overwrite` would break both in ways the macro cannot detect at run time.
 
-**Consequences.** The profile must set `use_lw_deletes: true` and the server `allow_nondeterministic_mutations=1`; otherwise the adapter default resolves to `legacy` and the run stops with a message that says what to change.
+**Consequences.** The profile must set `use_lw_deletes: true`, and the adapter must be able to enable `allow_nondeterministic_mutations` for its session; otherwise the adapter default resolves to `legacy` and the run stops with a message that says what to change.
 
 ### D5: Build into an intermediate relation and publish atomically
 
@@ -272,7 +272,7 @@ Every message carries the `bucketed_incremental:` prefix.
 
 ## Test strategy
 
-The integration harness runs a real ClickHouse server in Docker with `allow_nondeterministic_mutations=1`, `log_queries` on, and the database engine that supports atomic exchange. A dbt project in `integration_tests/` includes this package by local path, seeds source tables, and exercises one parametrized model whose config values come from `--vars`.
+The integration harness runs a real ClickHouse server in Docker with `log_queries` on and the database engine that supports atomic exchange. A dbt project in `integration_tests/` includes this package by local path, seeds source tables, and exercises one parametrized model whose config values come from `--vars`.
 
 | Layer | Scope | Examples |
 |-------|-------|---------|

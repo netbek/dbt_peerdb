@@ -17,7 +17,7 @@
 
 - `dbt_project.yml` keeps `require-dbt-version: [">=1.3.0", "<1.12.0"]`; the test environment pins `dbt-clickhouse==1.10.2`.
 - Every config name, enum value and error string is fixed. Error messages carry the prefix `bucketed_incremental:` and match the table in `docs/bucketed_incremental/design.md`.
-- The test server runs with `allow_nondeterministic_mutations=1` and query logging on; the dbt profile sets `use_lw_deletes: true`.
+- The test server runs with query logging on; the dbt profile sets `use_lw_deletes: true`. The adapter enables `allow_nondeterministic_mutations` for its session when the user may set it.
 - The materialization supports the `delete_insert` strategy only and rejects `inserts_only`.
 - Tests use the ClickHouse database `test` and drop it at the start of every test that seeds data.
 - American English in messages and docs.
@@ -37,7 +37,6 @@
 | File | Responsibility |
 |------|----------------|
 | `docker-compose.yml` | ClickHouse test server |
-| `integration_tests/clickhouse/config.d/allow_nondeterministic_mutations.xml` | Server setting for lightweight deletes |
 | `integration_tests/dbt_project.yml` | Test project |
 | `integration_tests/profiles.yml` | Test target with `use_lw_deletes: true` |
 | `integration_tests/packages.yml` | Includes this package by local path |
@@ -58,7 +57,6 @@
 
 **Files:**
 - Create: `docker-compose.yml`
-- Create: `integration_tests/clickhouse/config.d/allow_nondeterministic_mutations.xml`
 - Create: `integration_tests/dbt_project.yml`
 - Create: `integration_tests/profiles.yml`
 - Create: `integration_tests/packages.yml`
@@ -117,21 +115,11 @@ services:
       nofile:
         soft: 262144
         hard: 262144
-    volumes:
-      - ./integration_tests/clickhouse/config.d:/etc/clickhouse-server/config.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 2s
       timeout: 2s
       retries: 60
-```
-
-Create `integration_tests/clickhouse/config.d/allow_nondeterministic_mutations.xml`:
-
-```xml
-<clickhouse>
-  <allow_nondeterministic_mutations>1</allow_nondeterministic_mutations>
-</clickhouse>
 ```
 
 - [ ] **Step 4: Create the dbt test project**
@@ -1004,7 +992,8 @@ In `macros/materializations/bucketed_incremental.sql`, insert after `{%- set mar
     {{ exceptions.raise_compiler_error(
         'bucketed_incremental: only the delete_insert incremental strategy is supported, got "'
         ~ incremental_strategy ~ '". Set incremental_strategy="delete_insert"; it requires '
-        ~ 'use_lw_deletes: true in the profile and allow_nondeterministic_mutations on the server.'
+        ~ 'use_lw_deletes: true in the profile and a dbt user allowed to set '
+        ~ 'allow_nondeterministic_mutations.'
     ) }}
   {% endif %}
   {% set incremental_predicates = config.get('predicates', []) or config.get('incremental_predicates', []) %}

@@ -85,7 +85,8 @@
     {{ exceptions.raise_compiler_error(
         'bucketed_incremental: only the delete_insert incremental strategy is supported, got "'
         ~ incremental_strategy ~ '". Set incremental_strategy="delete_insert"; it requires '
-        ~ 'use_lw_deletes: true in the profile and allow_nondeterministic_mutations on the server.'
+        ~ 'use_lw_deletes: true in the profile and a dbt user allowed to set '
+        ~ 'allow_nondeterministic_mutations.'
     ) }}
   {% endif %}
   {% set incremental_predicates = config.get('predicates', []) or config.get('incremental_predicates', []) %}
