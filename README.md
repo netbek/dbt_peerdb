@@ -30,25 +30,35 @@ It works like a normal incremental model (https://docs.getdbt.com/docs/build/inc
 - First run, or any run with `--full-refresh`: dbt builds the whole table
   from all rows of the source. This materialization splits that big build
   into small buckets by key (about `rows_per_bucket` rows each), loads
-  them one by one into a temporary table, then swaps it into place. Readers
-  never see a half-built table. The materialization counts the source table
-  itself to decide how many buckets it needs.
+  them one by one into a temporary table, then publishes it in one step: a
+  rename on the first run; an atomic exchange afterwards (two renames for
+  views and engines without atomic exchange). Readers never see a
+  half-built table, and a failed build leaves the old contents untouched.
+  The materialization counts the source table itself to decide how many
+  buckets it needs, and each bucket re-reads the source, so a rebuild costs
+  about one source scan per bucket.
 - Incremental runs (every run after that): dbt transforms only new or
   changed rows since the last run and inserts them into the target table.
   Here that means the standard `delete+insert` step: delete the rows in the
   target table that the new batch replaces, then insert the new rows.
 
 It fits any source where one column never changes and identifies one row
-(a unique key), of type uuid or integer. Negative integer keys do not work
-(the bucket maths uses modulo). Only the `delete_insert` strategy is
-supported: `inserts_only` and any other `incremental_strategy` stop with an
-error instead of silently doing the wrong thing.
+(a unique key), of type uuid (`bucket_type="uuid"`) or integer
+(`bucket_type="int"` or `"uint"`). The bucket maths uses modulo, so integer
+keys must be non-negative: a full refresh that finds negative keys stops
+with an error instead of silently dropping those rows. Only the
+`delete_insert` strategy is supported: `inserts_only` and any other
+`incremental_strategy` stop with an error instead of silently doing the
+wrong thing. Set `incremental_strategy="delete_insert"` explicitly: the
+adapter defaults to it only on servers that allow
+`allow_nondeterministic_mutations` (needed for lightweight deletes);
+elsewhere its default is `legacy`, which this materialization rejects.
 
 What your model must do:
 
 - Put the line `-- __BUCKET_PREDICATE__` exactly where the bucket filter
-  belongs in the full-history branch of your SQL. Each full-refresh pass
-  fills that line in with its own bucket filter.
+  belongs in the full-history branch of your SQL. Each bucket pass fills
+  that line in with its own bucket filter.
 - Set `unique_key` to the same single column as `bucket_column`, so every
   version of one row always lands in the same bucket. Otherwise duplicates
   slip through unnoticed.
@@ -56,19 +66,24 @@ What your model must do:
   the `unique_key` grain): every pass re-reads all versions of the keys in
   its bucket.
 
-If `bucket_source_table` is empty, it builds an empty table (and swaps it in)
-instead of failing.
+If `bucket_source_table` is empty, it builds an empty table (and publishes
+it) instead of failing.
 
 Bucket size is set by `rows_per_bucket` (default 1000000, must be a
-positive whole number). The bucket count is the source table row count
-divided by this number, rounded up. Lower it if a single bucket exhausts memory;
-raise it for small tables to avoid a flurry of tiny buckets.
+positive whole number). The bucket count is the row count of
+`bucket_source_table` divided by this number, rounded up, so keep that
+table in sync with what the model reads, or buckets end up mis-sized.
+Lower it if a single bucket exhausts memory; raise it for small tables to
+avoid a flurry of tiny buckets. Each bucket re-reads `bucket_source_table`
+at a different moment, so rows that change mid-build may be missed until
+the next full refresh; run against a quiesced source when that matters.
 
 UUID example model config:
 
 ```sql
 {{ config(
     materialized="bucketed_incremental",
+    incremental_strategy="delete_insert",
     unique_key="uuid",
     order_by="uuid",
     bucket_column="uuid",
@@ -82,6 +97,7 @@ Integer example model config:
 ```sql
 {{ config(
     materialized="bucketed_incremental",
+    incremental_strategy="delete_insert",
     unique_key="id",
     order_by="id",
     bucket_column="id",
@@ -95,6 +111,7 @@ Full example model (integer key):
 ```sql
 {{ config(
     materialized="bucketed_incremental",
+    incremental_strategy="delete_insert",
     engine="MergeTree()",
     unique_key="id",
     order_by="id",

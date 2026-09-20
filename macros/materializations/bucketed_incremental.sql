@@ -69,9 +69,11 @@
   {% set need_swap = false %}
 
   {% if full_refresh_mode %}
-    {% if marker not in sql %}
+    {% set marker_count = sql.count(marker) %}
+    {% if marker_count != 1 %}
       {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: marker ' ~ marker ~ ' missing from model SQL.'
+          'bucketed_incremental: marker ' ~ marker ~ ' must appear exactly once in the model SQL; found '
+          ~ marker_count ~ '.'
       ) }}
     {% endif %}
     {% set bucket_parts = bucket_source_table.replace('"', '').replace("'", '').replace('`', '').split('.') %}
@@ -90,19 +92,33 @@
           ~ '" not found for model "' ~ model.name ~ '".'
       ) }}
     {% endif %}
-    {#- First run builds directly into the target (nothing to preserve, as
-        upstream does for `existing_relation is none`). Replacements build
-        into the intermediate relation and swap atomically. Views take the
-        rename branch below because cached views have can_exchange=False. -#}
-    {% if existing_relation is none %}
-      {% set build_relation = target_relation %}
+    {#- Every rebuild fills the intermediate relation and is published at the
+        end, so readers never see a half-built table and a failed build leaves
+        the target untouched. Publishing is a plain rename on the first run,
+        an atomic exchange when the existing table supports it, or two renames
+        otherwise (views and engines without atomic exchange report
+        can_exchange=False). -#}
+    {% set build_relation = intermediate_relation %}
+    {% set need_swap = true %}
+    {% if bucket_type == 'int' %}
+      {% set count_sql %}select count() as row_count, countIf({{ bucket_column }} < 0) as negative_key_count from {{ bucket_source_table }}{% endset %}
     {% else %}
-      {% set build_relation = intermediate_relation %}
-      {% set need_swap = true %}
+      {% set count_sql %}select count() as row_count from {{ bucket_source_table }}{% endset %}
     {% endif %}
-    {% set count_sql %}select count() as row_count from {{ bucket_source_table }}{% endset %}
     {% set count_result = run_query(count_sql) %}
     {% set row_count = count_result.columns[0].values()[0] | int %}
+    {% if bucket_type == 'int' %}
+      {% set negative_key_count = count_result.columns[1].values()[0] | int %}
+      {% if negative_key_count > 0 %}
+        {{ exceptions.raise_compiler_error(
+            'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
+            ~ '" has ' ~ negative_key_count ~ ' negative values in "' ~ bucket_column
+            ~ '". Negative integer keys cannot be bucketed (the bucket maths uses '
+            ~ 'modulo), so a full refresh would silently drop them. Use a '
+            ~ 'non-negative key column.'
+        ) }}
+      {% endif %}
+    {% endif %}
     {% set bucket_count = ((row_count / rows_per_bucket) | round(0, 'ceil')) | int %}
     {{ log(
         'bucketed_incremental: row_count='
@@ -169,14 +185,17 @@
   {% endif %}
 
   {% if need_swap %}
-      {% if existing_relation.can_exchange %}
+      {% if existing_relation is none %}
+        {% do adapter.rename_relation(intermediate_relation, target_relation) %}
+      {% elif existing_relation.can_exchange %}
         {% do adapter.rename_relation(intermediate_relation, backup_relation) %}
         {% do exchange_tables_atomic(backup_relation, target_relation) %}
+        {% do to_drop.append(backup_relation) %}
       {% else %}
         {% do adapter.rename_relation(target_relation, backup_relation) %}
         {% do adapter.rename_relation(intermediate_relation, target_relation) %}
+        {% do to_drop.append(backup_relation) %}
       {% endif %}
-      {% do to_drop.append(backup_relation) %}
   {% endif %}
 
   {% set should_revoke = should_revoke(existing_relation, full_refresh_mode) %}
