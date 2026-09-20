@@ -1,8 +1,10 @@
 [tools]
+gh = "latest"
 node = "24"
 pnpm = "latest"
 python = "3.13"
 ripgrep = "latest"
+shellcheck = "latest"
 trivy = "latest"
 uv = "latest"
 zizmor = "latest"
