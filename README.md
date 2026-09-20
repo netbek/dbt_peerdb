@@ -40,7 +40,7 @@ It works like a normal incremental model (https://docs.getdbt.com/docs/build/inc
   about one source scan per bucket.
 - Incremental runs (every run after that): dbt transforms only new or
   changed rows since the last run and inserts them into the target table.
-  Here that means the standard `delete+insert` step: delete the rows in the
+  Here that means the standard delete+insert step: delete the rows in the
   target table that the new batch replaces, then insert the new rows.
 
 It fits any source where one column never changes and identifies one row
@@ -191,7 +191,7 @@ select * from deduped
 ```
 
 On incremental runs this re-reads every version of each touched id; the
-`delete+insert` step then replaces those ids in the target table. The `>=`
+delete+insert step then replaces those ids in the target table. The `>=`
 comparison is required by the snapshot guarantee (see above); keep it if
 you adapt this example. `_peerdb_synced_at` is the high-watermark column
 PeerDB maintains on replicated tables; for non-PeerDB sources use your own
