@@ -1,0 +1,15 @@
+.venv
+node_modules
+vendor
+
+# Generated state
+skills-lock.json
+
+# Third-party agent skills are ignored
+.agents/skills/*
+
+# First-party agent skills are un-ignored and committed. Uncomment one line per skill:
+# !.agents/skills/my-skill/
+
+# Generated links are ignored
+.claude/skills/*

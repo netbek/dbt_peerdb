@@ -1,0 +1,36 @@
+[tools]
+gh = "latest"
+node = "24"
+pnpm = "latest"
+python = "3.13"
+ripgrep = "latest"
+shellcheck = "latest"
+trivy = "latest"
+uv = "latest"
+zizmor = "latest"
+
+[settings]
+lockfile = true
+minimum_release_age = "7d"
+npm.package_manager = "pnpm"
+python.uv_venv_auto = "create|source"
+
+[env]
+_.path = ["{{config_root}}/node_modules/.bin"]
+DO_NOT_TRACK = "1"
+# https://github.com/vercel-labs/skills/blob/v1.5.16/README.md#environment-variables
+DISABLE_TELEMETRY = "1"
+
+[hooks.enter]
+run = """
+mise install --quiet
+mise run pnpm-install
+# if [ -d .git ]; then pre-commit install --overwrite > /dev/null 2>&1; fi
+"""
+
+[tasks.pnpm-install]
+description = "Installs dependencies with pnpm"
+quiet = true
+run = "pnpm install --loglevel error"
+sources = ["package.json", "pnpm-lock.yaml", "mise.toml"]
+outputs = ["node_modules/.pnpm/lock.yaml"]

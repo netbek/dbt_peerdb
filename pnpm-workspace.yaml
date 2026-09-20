@@ -1,0 +1,7 @@
+blockExoticSubdeps: true
+
+minimumReleaseAge: 10080
+
+saveExact: false
+
+trustPolicy: no-downgrade
