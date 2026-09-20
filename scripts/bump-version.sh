@@ -60,3 +60,6 @@ echo "bumped ${OLD} -> ${NEW}"
 replace "package.json" "\"version\": \"${OLD}\"" "\"version\": \"${NEW}\""
 replace "dbt_project.yml" "version: ${OLD}" "version: ${NEW}"
 replace "README.md" "        version: ${OLD}" "        version: ${NEW}"
+
+git add pyproject.toml package.json dbt_project.yml README.md
+git commit -m "chore(release): ${NEW}"
