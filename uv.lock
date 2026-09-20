@@ -1,0 +1,15 @@
+version = 1
+revision = 3
+requires-python = "==3.13.*"
+
+[options]
+exclude-newer = "2026-09-13T06:47:55.127268914Z"
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+netbek-dw-lib = { timestamp = "2026-09-20T06:47:55.127291101Z", span = "PT0S" }
+
+[[package]]
+name = "dbt-peerdb"
+version = "0.0.7"
+source = { virtual = "." }
