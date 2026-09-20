@@ -1,0 +1,27 @@
+# Agents to install skills for. See https://github.com/netbek/skills-manager#supported-agents
+agents:
+  - opencode
+  # - claude-code
+
+# Directories the CLI fills with skills. At least one is required.
+# git-ignored entries absent from the list below are pruned.
+skills-dirs:
+  - .agents/skills
+
+# Symlink dirs that mirror the first skills-dirs entry. The CLI removes
+# dangling or leftover git-ignored links and refreshes links to committed
+# first-party skills.
+# links-dirs:
+#   - .claude/skills
+
+# Third-party skills. Each entry needs a repo, an optional ref, and at least
+# one skill. See https://github.com/netbek/skills-manager#source-formats
+repos:
+  - repo: clickhouse/agent-skills
+    skills: [clickhouse-best-practices]
+  - repo: dbt-labs/dbt-agent-skills
+    skills: [fetching-dbt-docs, using-dbt-for-analytics-engineering]
+  - repo: tajd/economist-style-guide-plugin
+    skills: [economist-style]
+  - repo: vercel-labs/skills
+    skills: [find-skills]

@@ -1,0 +1,17 @@
+{
+  "name": "dbt-peerdb",
+  "private": true,
+  "version": "0.0.7",
+  "description": "",
+  "author": {
+    "name": "Hein Bekker",
+    "email": "hein@netbek.co.za",
+    "url": "https://www.netbek.co.za"
+  },
+  "license": "Apache License 2.0",
+  "type": "module",
+  "main": "index.js",
+  "devDependencies": {
+    "@netbek/skills-manager": "^0.2.1"
+  }
+}
