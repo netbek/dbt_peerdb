@@ -16,10 +16,11 @@
   {%- set has_contract = config.get('contract').enforced -%}
   {%- set full_refresh_mode = (should_full_refresh() or existing_relation is none or existing_relation.is_view) -%}
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
-  {%- set bucket_column = config.get('bucket_column', none) -%}
-  {%- set bucket_type = config.get('bucket_type', none) -%}
+  {%- set bucket_key_column = config.get('bucket_key_column', none) -%}
   {%- set rows_per_bucket = config.get('rows_per_bucket', 1000000) -%}
   {%- set bucket_source_table = config.get('bucket_source_table', none) -%}
+  {%- set bucket_snapshot_column = config.get('bucket_snapshot_column', none) -%}
+  {%- set on_concurrent_writes = config.get('on_concurrent_writes', 'error') -%}
   {%- set marker = '-- __BUCKET_PREDICATE__' -%}
 
   {%- set intermediate_relation = make_intermediate_relation(target_relation) -%}
@@ -28,37 +29,68 @@
   {%- set preexisting_intermediate_relation = load_cached_relation(intermediate_relation) -%}
   {%- set preexisting_backup_relation = load_cached_relation(backup_relation) -%}
 
-  {% if bucket_column is none %}
+  {%- set identifier_pattern = '^[A-Za-z_][A-Za-z0-9_]*$' -%}
+  {%- set source_pattern = '^[A-Za-z_][A-Za-z0-9_]*[.][A-Za-z_][A-Za-z0-9_]*$' -%}
+
+  {% if bucket_key_column is none or bucket_key_column is not string or not modules.re.match(identifier_pattern, bucket_key_column|trim) %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: bucket_column is required (the immutable key column).'
+        'bucketed_incremental: bucket_key_column is required and must be a bare column identifier '
+        ~ '(letters, digits, underscore), got "' ~ bucket_key_column ~ '".'
     ) }}
   {% endif %}
-  {% if bucket_source_table is none %}
+  {% set bucket_key_column = bucket_key_column|trim %}
+  {% if bucket_snapshot_column is none or bucket_snapshot_column is not string or not modules.re.match(identifier_pattern, bucket_snapshot_column|trim) %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: bucket_source_table is required (e.g. "my_database.my_table").'
+        'bucketed_incremental: bucket_snapshot_column is required and must be a bare column identifier '
+        ~ '(letters, digits, underscore), got "' ~ bucket_snapshot_column ~ '".'
     ) }}
   {% endif %}
-  {% if bucket_type not in ('uuid', 'uint', 'int') %}
+  {% set bucket_snapshot_column = bucket_snapshot_column|trim %}
+  {% if bucket_snapshot_column == bucket_key_column %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: bucket_type must be one of "uuid", "uint", "int".'
+        'bucketed_incremental: bucket_snapshot_column must be a different column from bucket_key_column.'
     ) }}
   {% endif %}
-  {% if unique_key != bucket_column %}
+  {% if bucket_source_table is none or bucket_source_table is not string or not modules.re.match(source_pattern, bucket_source_table|trim) %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: unique_key must be the single bucket_column, '
-        ~ 'otherwise versions of one row split across buckets.'
+        'bucketed_incremental: bucket_source_table is required and must have the form "database.table" '
+        ~ 'with bare identifiers (letters, digits, underscore), got "' ~ bucket_source_table ~ '".'
     ) }}
   {% endif %}
-  {% if rows_per_bucket is not number or rows_per_bucket | int != rows_per_bucket or rows_per_bucket < 1 %}
+  {% set bucket_source_table = bucket_source_table|trim %}
+  {% if unique_key is none or unique_key != bucket_key_column %}
+    {{ exceptions.raise_compiler_error(
+        'bucketed_incremental: unique_key must be the single bucket_key_column "'
+        ~ bucket_key_column ~ '", otherwise versions of one row split across buckets.'
+    ) }}
+  {% endif %}
+  {% if rows_per_bucket is boolean or rows_per_bucket is not number or rows_per_bucket | int != rows_per_bucket or rows_per_bucket < 1 %}
     {{ exceptions.raise_compiler_error(
         'bucketed_incremental: rows_per_bucket must be a positive integer.'
     ) }}
   {% endif %}
-  {% if bucket_type == 'uuid' %}
-    {% set bucket_lhs = 'reinterpretAsUInt64(' ~ bucket_column ~ ')' %}
-  {% else %}
-    {% set bucket_lhs = bucket_column %}
+  {% if on_concurrent_writes not in ('warn', 'error', 'ignore') %}
+    {{ exceptions.raise_compiler_error(
+        'bucketed_incremental: on_concurrent_writes must be one of "warn", "error", "ignore", got "'
+        ~ on_concurrent_writes ~ '".'
+    ) }}
   {% endif %}
+  {% if inserts_only %}
+    {{ exceptions.raise_compiler_error(
+        'bucketed_incremental: inserts_only is not supported; incremental runs always use delete+insert.'
+    ) }}
+  {% endif %}
+  {% set incremental_strategy = adapter.calculate_incremental_strategy(config.get('incremental_strategy')) %}
+  {% if incremental_strategy != 'delete_insert' %}
+    {{ exceptions.raise_compiler_error(
+        'bucketed_incremental: only the delete_insert incremental strategy is supported, got "'
+        ~ incremental_strategy ~ '". Set incremental_strategy="delete_insert"; it requires '
+        ~ 'use_lw_deletes: true in the profile and allow_nondeterministic_mutations on the server.'
+    ) }}
+  {% endif %}
+  {% set incremental_predicates = config.get('predicates', []) or config.get('incremental_predicates', []) %}
+  {% set partition_by = config.get('partition_by') %}
+  {% do adapter.validate_incremental_strategy(incremental_strategy, incremental_predicates, unique_key, partition_by) %}
 
   {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
   {{ drop_relation_if_exists(preexisting_backup_relation) }}
@@ -76,13 +108,7 @@
           ~ marker_count ~ '.'
       ) }}
     {% endif %}
-    {% set bucket_parts = bucket_source_table.replace('"', '').replace("'", '').replace('`', '').split('.') %}
-    {% if bucket_parts | length != 2 %}
-      {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: bucket_source_table must have the form "database.table", got "'
-          ~ bucket_source_table ~ '".'
-      ) }}
-    {% endif %}
+    {% set bucket_parts = bucket_source_table.split('.') %}
     {% set bucket_relation = adapter.get_relation(
         database=bucket_parts[0], schema=bucket_parts[0], identifier=bucket_parts[1]
     ) %}
@@ -92,39 +118,119 @@
           ~ '" not found for model "' ~ model.name ~ '".'
       ) }}
     {% endif %}
+    {% if bucket_relation.type != 'table' %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
+          ~ '" must be a table, got type "' ~ bucket_relation.type ~ '".'
+      ) }}
+    {% endif %}
+    {% set ns = namespace(bucket_dtype=none, snapshot_dtype=none) %}
+    {% for col in adapter.get_columns_in_relation(bucket_relation) %}
+      {% if col.name == bucket_key_column %}
+        {% set ns.bucket_dtype = col.dtype %}
+      {% endif %}
+      {% if col.name == bucket_snapshot_column %}
+        {% set ns.snapshot_dtype = col.dtype %}
+      {% endif %}
+    {% endfor %}
+    {% if ns.bucket_dtype is none %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_key_column "' ~ bucket_key_column
+          ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
+      ) }}
+    {% endif %}
+    {% if ns.bucket_dtype == 'UUID' %}
+      {% set bucket_key_type = 'uuid' %}
+    {% elif ns.bucket_dtype in ('Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256') %}
+      {% set bucket_key_type = 'int' %}
+    {% elif ns.bucket_dtype in ('UInt8', 'UInt16', 'UInt32', 'UInt64', 'UInt128', 'UInt256') %}
+      {% set bucket_key_type = 'uint' %}
+    {% else %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_key_column "' ~ bucket_key_column
+          ~ '" has unsupported type "' ~ ns.bucket_dtype
+          ~ '"; expected a non-null UUID, signed integer or unsigned integer column.'
+      ) }}
+    {% endif %}
+    {% if bucket_key_type == 'uuid' %}
+      {% set bucket_lhs = 'reinterpretAsUInt64(' ~ bucket_key_column ~ ')' %}
+    {% else %}
+      {% set bucket_lhs = bucket_key_column %}
+    {% endif %}
+    {% if ns.snapshot_dtype is none %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
+          ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
+      ) }}
+    {% endif %}
+    {% if not modules.re.match("^DateTime64[(]9(, *'[^']+')?[)]$", ns.snapshot_dtype) %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
+          ~ '" has unsupported type "' ~ ns.snapshot_dtype
+          ~ '"; it must be a non-null DateTime64(9) column.'
+      ) }}
+    {% endif %}
+    {% set snapshot_tz = ns.snapshot_dtype.split("'")[1] if "'" in ns.snapshot_dtype else none %}
     {#- Every rebuild fills the intermediate relation and is published at the
         end, so readers never see a half-built table and a failed build leaves
         the target untouched. Publishing is a plain rename on the first run,
         an atomic exchange when the existing table supports it, or two renames
         otherwise (views and engines without atomic exchange report
-        can_exchange=False). -#}
+        can_exchange=False). Bucket builds are pinned to the snapshot bound S0
+        (max of bucket_snapshot_column, captured with the row count): every
+        bucket reads only rows up to S0, so writes landing mid-build are
+        excluded from all buckets and picked up by the next incremental run
+        instead of slipping through silently. The snapshot column must be a
+        non-null DateTime64(9); models must compare it with >= against the
+        previous target maximum so a write stamped exactly S0 is recaptured. -#}
     {% set build_relation = intermediate_relation %}
     {% set need_swap = true %}
-    {% if bucket_type in ('int', 'uint') %}
-      {% set count_sql %}select count() as row_count, countIf({{ bucket_column }} < 0) as negative_key_count from {{ bucket_source_table }}{% endset %}
+    {% set count_select = ['count() as row_count'] %}
+    {% if bucket_key_type in ('int', 'uint') %}
+      {% do count_select.append('countIf(' ~ bucket_key_column ~ ' < 0) as negative_key_count') %}
+      {% set snapshot_idx = 2 %}
     {% else %}
-      {% set count_sql %}select count() as row_count from {{ bucket_source_table }}{% endset %}
+      {% set snapshot_idx = 1 %}
     {% endif %}
+    {% do count_select.append('toString(max(' ~ bucket_snapshot_column ~ ')) as snapshot_max') %}
+    {% set count_sql %}select {{ count_select | join(', ') }} from {{ bucket_source_table }}{% endset %}
     {% set count_result = run_query(count_sql) %}
     {% set row_count = count_result.columns[0].values()[0] | int %}
-    {% if bucket_type in ('int', 'uint') %}
+    {% if bucket_key_type in ('int', 'uint') %}
       {% set negative_key_count = count_result.columns[1].values()[0] | int %}
       {% if negative_key_count > 0 %}
         {{ exceptions.raise_compiler_error(
             'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
-            ~ '" has ' ~ negative_key_count ~ ' negative values in "' ~ bucket_column
+            ~ '" has ' ~ negative_key_count ~ ' negative values in "' ~ bucket_key_column
             ~ '". Negative integer keys cannot be bucketed (the bucket maths uses '
             ~ 'modulo), so a full refresh would silently drop them. Use a '
             ~ 'non-negative key column.'
         ) }}
       {% endif %}
     {% endif %}
+    {% set snapshot_str = count_result.columns[snapshot_idx].values()[0] %}
+    {% if snapshot_str is none or snapshot_str|trim|length == 0 %}
+      {% set snapshot_str = none %}
+    {% endif %}
+    {% if snapshot_str is none and row_count > 0 %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
+          ~ '" has no usable maximum in bucket_source_table "' ~ bucket_source_table ~ '".'
+      ) }}
+    {% endif %}
+    {% if snapshot_str is none %}
+      {% set snapshot_literal = none %}
+    {% else %}
+      {% set snapshot_literal = "toDateTime64('" ~ snapshot_str ~ "', 9" ~ (", '" ~ snapshot_tz ~ "'" if snapshot_tz else "") ~ ")" %}
+    {% endif %}
     {% set bucket_count = ((row_count / rows_per_bucket) | round(0, 'ceil')) | int %}
     {{ log(
         'bucketed_incremental: row_count='
         ~ row_count
         ~ ' bucket_count='
-        ~ bucket_count,
+        ~ bucket_count
+        ~ ' snapshot_max='
+        ~ (snapshot_str or 'n/a'),
         info=True,
     ) }}
     {% if bucket_count < 1 %}
@@ -139,7 +245,11 @@
             ~ ' % '
             ~ bucket_count
             ~ ' = '
-            ~ i %}
+            ~ i
+            ~ ' and '
+            ~ bucket_snapshot_column
+            ~ ' <= '
+            ~ snapshot_literal %}
         {% set bucket_sql = sql.replace(marker, predicate) %}
         {{ log(
             'bucketed_incremental: Processing bucket ' ~ (i + 1) ~ ' of ' ~ bucket_count, info=True
@@ -155,23 +265,29 @@
         {% endif %}
       {% endfor %}
     {% endif %}
+    {% if snapshot_str is not none and on_concurrent_writes != 'ignore' %}
+      {% set post_count_sql %}select max({{ bucket_snapshot_column }}) > {{ snapshot_literal }} as writes_detected from {{ bucket_source_table }}{% endset %}
+      {% set post_count_result = run_query(post_count_sql) %}
+      {% set writes_detected = post_count_result.columns[0].values()[0] %}
+      {% if writes_detected %}
+        {% if on_concurrent_writes == 'error' %}
+          {{ exceptions.raise_compiler_error(
+              'bucketed_incremental: concurrent writes to bucket_source_table "' ~ bucket_source_table
+              ~ '" detected during the rebuild (snapshot bound ' ~ snapshot_str ~ ' exceeded). '
+              ~ 'Re-run against a quiesced source; the previous table was left untouched.'
+          ) }}
+        {% else %}
+          {{ log(
+              'bucketed_incremental: WARNING: concurrent writes to bucket_source_table "'
+              ~ bucket_source_table
+              ~ '" detected during the rebuild; run an incremental afterwards to converge.',
+              info=True,
+          ) }}
+        {% endif %}
+      {% endif %}
+    {% endif %}
 
   {% else %}
-    {% if inserts_only %}
-      {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: inserts_only is not supported; incremental runs always use delete+insert.'
-      ) }}
-    {% endif %}
-    {% set incremental_strategy = adapter.calculate_incremental_strategy(config.get('incremental_strategy')) %}
-    {% set incremental_predicates = config.get('predicates', []) or config.get('incremental_predicates', []) %}
-    {% if incremental_strategy != 'delete_insert' %}
-      {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: only the delete_insert incremental strategy is supported, got '
-          ~ incremental_strategy ~ '.'
-      ) }}
-    {% endif %}
-    {% set partition_by = config.get('partition_by') %}
-    {% do adapter.validate_incremental_strategy(incremental_strategy, incremental_predicates, unique_key, partition_by) %}
     {%- if on_schema_change != 'ignore' %}
       {%- set column_changes = adapter.check_incremental_schema_changes(on_schema_change, existing_relation, sql, query_settings=config.get('query_settings', {})) -%}
       {% if column_changes %}
