@@ -100,14 +100,14 @@
         can_exchange=False). -#}
     {% set build_relation = intermediate_relation %}
     {% set need_swap = true %}
-    {% if bucket_type == 'int' %}
+    {% if bucket_type in ('int', 'uint') %}
       {% set count_sql %}select count() as row_count, countIf({{ bucket_column }} < 0) as negative_key_count from {{ bucket_source_table }}{% endset %}
     {% else %}
       {% set count_sql %}select count() as row_count from {{ bucket_source_table }}{% endset %}
     {% endif %}
     {% set count_result = run_query(count_sql) %}
     {% set row_count = count_result.columns[0].values()[0] | int %}
-    {% if bucket_type == 'int' %}
+    {% if bucket_type in ('int', 'uint') %}
       {% set negative_key_count = count_result.columns[1].values()[0] | int %}
       {% if negative_key_count > 0 %}
         {{ exceptions.raise_compiler_error(
