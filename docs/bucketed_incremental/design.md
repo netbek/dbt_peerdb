@@ -4,7 +4,7 @@
 
 The warehouse mirrors operational tables into ClickHouse with PeerDB, then dedupes them in staging models by key. Some of those tables hold hundreds of millions of rows. A full refresh that runs as one `create table ... as select` can exhaust memory, monopolize the server for hours and fail late, after most of the work is done. Upstream `dbt-clickhouse` offers a single-CTAS full refresh and several incremental strategies; neither fits a source under continuous change.
 
-ClickHouse gives each query a consistent snapshot but no snapshot that spans separate statements. A rebuild split into many statements therefore reads a different source state in each one. Without a guard, a row written after its bucket has been read never appears in the target, and no later incremental run selects it. `docs/plans/concurrent-writes-data-loss.md` records the analysis and the decision: pin every bucket to a captured snapshot bound, detect writes that land mid-build, and document the tie-safe watermark that lets the next incremental run recover them.
+ClickHouse gives each query a consistent snapshot but no snapshot that spans separate statements. A rebuild split into many statements therefore reads a different source state in each one. Without a guard, a row written after its bucket has been read never appears in the target, and no later incremental run selects it. `docs/bucketed_incremental/concurrent-writes-data-loss.md` records the analysis and the decision: pin every bucket to a captured snapshot bound, detect writes that land mid-build, and document the tie-safe watermark that lets the next incremental run recover them.
 
 ## Goals
 
@@ -292,6 +292,6 @@ Tests assert observable effects: table contents, stdout run logs, and `system.qu
 ## References
 
 - `README.md` in this package: user-facing description and model example.
-- `docs/plans/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
+- `docs/bucketed_incremental/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
 - Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.2).
 - Adapter strategy resolution and validation: `vendor/dbt-clickhouse/dbt/adapters/clickhouse/impl.py`.
