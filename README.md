@@ -129,6 +129,41 @@ What the query does:
 replicated tables; for non-PeerDB sources use your own updated-at column,
 declared non-null `DateTime64(9)`.
 
+## Development
+
+### Prerequisites
+
+1. Clone the repo:
+
+    ```shell
+    git clone git@github.com:netbek/dbt_peerdb.git
+    ```
+
+2. Install Mise and add activation to `~/.bashrc`, e.g.
+
+    ```shell
+    curl -fsSL https://github.com/jdx/mise/releases/download/v2026.7.13/install.sh | sh
+    ```
+
+    See [other installation methods](https://mise.en.dev/installing-mise.html).
+
+3. Trust `mise.toml`:
+
+    ```shell
+    mise trust
+    ```
+
+### Vendor reference sources
+
+Run `make install` to clone pinned reference sources into `vendor/` for upgrade diffing.
+Re-running `make install` discards local changes in these checkouts and resets them to the pinned refs, so never edit them directly.
+
+### Release
+
+1. Run `make bump-version [major|minor|patch]`. This bumps `pyproject.toml`, syncs `package.json`, `dbt_project.yml`, and the `packages.yml` pin in this README, then commits.
+2. Push the commit.
+3. Check the tree is clean, then run `make create-release`.
+
 ## License
 
 Copyright (c) 2024 Hein Bekker. Licensed under the Apache License, version 2.
