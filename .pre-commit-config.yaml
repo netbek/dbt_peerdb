@@ -1,0 +1,42 @@
+default_language_version:
+  python: python3.13
+
+default_stages: [pre-commit]
+
+fail_fast: true
+
+repos:
+  - repo: https://github.com/google/yamlfmt
+    rev: v0.21.0
+    hooks:
+      - id: yamlfmt
+        files: \.ya?ml$
+
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.4.0
+    hooks:
+      - id: autoflake
+        args: [--remove-all-unused-imports, --in-place]
+        stages: [manual]
+
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.21.2
+    hooks:
+      - id: pyupgrade
+        args: [--py313-plus]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 9.0.1
+    hooks:
+      - id: isort
+        args: [--settings-path, pyproject.toml]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff-check
+        args: [--config, pyproject.toml]
+        stages: [manual]
+
+      - id: ruff-format
+        args: [--config, pyproject.toml]

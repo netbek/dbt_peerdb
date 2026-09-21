@@ -41,6 +41,15 @@ git-fetch() {
 
 cd "${ROOT_DIR}"
 
+# Install Node dependencies
+pnpm install
+
+# Install Python dependencies
+uv sync --all-extras --all-groups
+
+# Install agent skills
+pnpm exec skills-manager install --force
+
 # Fetch vendor projects
 git-fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.11.14
 git-fetch vendor/dbt-adapters https://github.com/dbt-labs/dbt-adapters main dbt-adapters

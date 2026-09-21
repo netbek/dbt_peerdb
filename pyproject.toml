@@ -5,3 +5,41 @@ description = "dbt helpers for PeerDB-replicated ClickHouse tables"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = []
+
+[dependency-groups]
+dev = [
+    "docker>=7.2.0",
+    "netbek-dw-lib[clickhouse]>=1.36.8",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-docker>=3.2.5",
+    "ruff>=0.16.7",
+    "ty>=0.0.80",
+]
+
+[tool.isort]
+force_alphabetical_sort = true
+line_length = 100
+profile = "black"
+py_version = 313
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["./vendor"]
+
+[tool.ruff.lint]
+ignore = [
+    "D100", "D101", "D102", "D103", "D104", "D107", "D205",
+    # Rule is ignored for ruff >= 0.16. TODO Configure isort and ruff to work together.
+    "I001"
+]
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.pytest]
+addopts = ["-x", "--no-header", "--container-scope=module", "--ignore=vendor"]
+
+[tool.uv]
+exclude-newer = "7 days"
