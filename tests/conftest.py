@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from dw_lib.database import ClickHouseAdapter, ClickHouseSettings
+from dw_lib.dbt import Dbt
 from pathlib import Path
 from typing import Any
 
@@ -47,3 +48,17 @@ class DatabaseTest:
         docker_services.wait_until_responsive(check=is_responsive, timeout=10, pause=1)
 
         yield clickhouse_adapter
+
+
+class InvocationTest(DatabaseTest):
+    @pytest.fixture
+    def profiles_dir(self) -> Path:
+        return Path(__file__).parent / "data" / ".dbt"
+
+    @pytest.fixture
+    def project_dir(self) -> Path:
+        return Path(__file__).parent / "data" / "dbt"
+
+    @pytest.fixture
+    def dbt(self, profiles_dir, project_dir) -> Dbt:
+        return Dbt(profiles_dir=profiles_dir, project_dir=project_dir)
