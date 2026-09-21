@@ -2,7 +2,7 @@
   "name": "dbt-peerdb",
   "private": true,
   "version": "0.0.7",
-  "description": "",
+  "description": "dbt helpers for PeerDB-replicated ClickHouse tables",
   "author": {
     "name": "Hein Bekker",
     "email": "hein@netbek.co.za",

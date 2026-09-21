@@ -1,5 +1,7 @@
 # dbt_peerdb
 
+dbt helpers for PeerDB-replicated ClickHouse tables.
+
 ## Installation
 
 1. Add the package to your `packages.yml`:
