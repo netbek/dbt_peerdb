@@ -50,15 +50,17 @@ class DatabaseTest:
         yield clickhouse_adapter
 
 
-class InvocationTest(DatabaseTest):
+class IntegrationTest(DatabaseTest):
     @pytest.fixture
     def profiles_dir(self) -> Path:
-        return Path(__file__).parent / "data" / ".dbt"
+        return Path(__file__).parent / "fixtures" / ".dbt"
 
     @pytest.fixture
     def project_dir(self) -> Path:
-        return Path(__file__).parent / "data" / "dbt"
+        return Path(__file__).parent / "fixtures" / "dbt"
 
     @pytest.fixture
-    def dbt(self, profiles_dir, project_dir) -> Dbt:
+    def dbt(
+        self, profiles_dir: Path, project_dir: Path, clickhouse_adapter: ClickHouseAdapter
+    ) -> Dbt:
         return Dbt(profiles_dir=profiles_dir, project_dir=project_dir)
