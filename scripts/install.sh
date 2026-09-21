@@ -51,7 +51,7 @@ uv sync --all-extras --all-groups
 pnpm exec skills-manager install --force
 
 # Fetch vendor projects
-git-fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.11.14
+git-fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.11.15
 git-fetch vendor/dbt-adapters https://github.com/dbt-labs/dbt-adapters main dbt-adapters
 git-fetch vendor/dbt-clickhouse https://github.com/ClickHouse/dbt-clickhouse v1.10.2
 git-fetch vendor/peerdb https://github.com/PeerDB-io/peerdb v0.37.1
