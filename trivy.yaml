@@ -1,0 +1,6 @@
+pkg:
+  include-dev-deps: true
+
+scan:
+  disable-telemetry: true
+  skip-version-check: true
