@@ -20,7 +20,8 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 DO_NOT_TRACK = "1"
 # https://github.com/vercel-labs/skills/blob/v1.5.16/README.md#environment-variables
 DISABLE_TELEMETRY = "1"
-# Set vars to override vars from ancestor directory (if any)
+# Set env vars to override those from ancestor directory (e.g. Nix environment)
+PYTHONPATH = "{{config_root}}/.venv/lib/python3.13/site-packages"
 UV_PROJECT_ENVIRONMENT = "{{config_root}}/.venv"
 UV_PYTHON_DOWNLOADS = "automatic"
 UV_PYTHON_PREFERENCE = "only-managed"
