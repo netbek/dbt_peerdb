@@ -37,7 +37,7 @@ then fails the run (`error`, the default), logs (`warn`), or stays quiet
 (`ignore`) when the source moved meanwhile. Models select changed keys
 with `snapshot >= high_watermark`, so the next incremental run recovers
 those writes, including ties at the bound. The key column type is inferred
-from the source (non-null `UUID`, signed or unsigned integers) and
+from the source (non-null UUID, signed or unsigned integers) and
 `unique_key` must be that same single column.
 
 Based on the [dbt-clickhouse `incremental` materialization](https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.2/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql).
