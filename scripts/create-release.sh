@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates a GitHub release for the current project version.
-# Expects the version tag to exist locally and on origin already.
+# Creates the version tag if it does not exist yet.
 # Usage: create-release.sh (no args; version comes from pyproject.toml via uv)
 set -euo pipefail
 
@@ -17,7 +17,7 @@ die() {
 [ "${1:-}" = "--help" ] && {
     echo "Usage: $0"
     echo "Creates a GitHub release for the version in pyproject.toml."
-    echo "The version tag must exist locally and on origin first."
+    echo "Creates the version tag if it does not exist yet."
     exit 0
 }
 
@@ -32,10 +32,6 @@ cd "${ROOT_DIR}"
 VERSION="$(uv version --short)"
 [ -n "${VERSION}" ] || die "could not read version from pyproject.toml"
 
-git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null \
-    || die "local tag '${VERSION}' missing, create it first"
-git ls-remote --tags origin | grep -qw "${VERSION}" \
-    || die "tag '${VERSION}' not on origin, push it first"
 if gh release view "${VERSION}" >/dev/null 2>&1; then
     die "release '${VERSION}' already exists"
 fi
