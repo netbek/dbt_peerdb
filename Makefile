@@ -24,6 +24,10 @@ repo-scan:
 	@echo "$(YELLOW)Scanning entire repository for vulnerabilities...$(RESET)"
 	trivy fs .
 
+node-install:
+	@echo "$(YELLOW)Installing Node dependencies...$(RESET)"
+	rm -fr node_modules && pnpm install
+
 node-outdated:
 	@echo "$(YELLOW)Listing outdated Node dependencies...$(RESET)"
 	@pnpm outdated || true
@@ -59,6 +63,10 @@ ifeq (node-why,$(firstword $(MAKECMDGOALS)))
 %:
 	@:
 endif
+
+python-install:
+	@echo "$(YELLOW)Installing Python dependencies...$(RESET)"
+	rm -fr .venv && uv sync --all-extras --all-groups
 
 python-outdated:
 	@echo "$(YELLOW)Listing outdated Python dependencies...$(RESET)"

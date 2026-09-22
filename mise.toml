@@ -20,15 +20,29 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 DO_NOT_TRACK = "1"
 # https://github.com/vercel-labs/skills/blob/v1.5.16/README.md#environment-variables
 DISABLE_TELEMETRY = "1"
-# Set env vars to override those from ancestor directory (e.g. Nix environment)
-PYTHONPATH = "{{config_root}}/.venv/lib/python3.13/site-packages"
-UV_PROJECT_ENVIRONMENT = "{{config_root}}/.venv"
-UV_PYTHON_DOWNLOADS = "automatic"
-UV_PYTHON_PREFERENCE = "only-managed"
+
+# TODO: Remove if not used
+# # Set env vars to override those from ancestor directory (e.g. Nix environment)
+# PYTHONPATH = "{{config_root}}/.venv/lib/python3.13/site-packages"
+# UV_PROJECT_ENVIRONMENT = "{{config_root}}/.venv"
+# UV_PYTHON_DOWNLOADS = "automatic"
+# UV_PYTHON_PREFERENCE = "only-managed"
+# DBT_FAIL_FAST = "true"
+# DBT_LOG_FORMAT = "text"
+# DBT_LOG_FORMAT_FILE = "text"
+# DBT_LOG_LEVEL = "info"
+# DBT_LOG_LEVEL_FILE = "debug"
+# DBT_PARTIAL_PARSE = "true"
+# DBT_PROFILES_DIR = "{{config_root}}/tests/fixtures/.dbt"
+# DBT_PROJECT_DIR = "{{config_root}}/tests/fixtures/dbt"
+# DBT_SEND_ANONYMOUS_USAGE_STATS = "false"
+# DBT_TARGET_NAME = "dev"
+# DBT_USE_COLORS = "true"
 
 [hooks.enter]
 run = """
 mise install --quiet
+uv sync --all-extras --all-groups --quiet
 mise run pnpm-install
 if [ -d .git ]; then pre-commit install --overwrite > /dev/null 2>&1; fi
 """

@@ -1,0 +1,4 @@
+packages:
+  - local: ../../../
+    name: dbt_peerdb
+sha1_hash: cd4577c08c6f7b750aeccae44fb4870e799dc4fb

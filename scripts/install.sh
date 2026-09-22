@@ -42,10 +42,13 @@ git-fetch() {
 cd "${ROOT_DIR}"
 
 # Install Node dependencies
-pnpm install
+rm -fr node_modules && pnpm install
 
 # Install Python dependencies
-uv sync --all-extras --all-groups
+rm -fr .venv && uv sync --all-extras --all-groups
+
+# Install pre-commit hooks
+if [ -d .git ]; then pre-commit install --overwrite > /dev/null 2>&1; fi
 
 # Install agent skills
 pnpm exec skills-manager install --force
@@ -55,3 +58,7 @@ git-fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.11.15
 git-fetch vendor/dbt-adapters https://github.com/dbt-labs/dbt-adapters main dbt-adapters
 git-fetch vendor/dbt-clickhouse https://github.com/ClickHouse/dbt-clickhouse v1.10.2
 git-fetch vendor/peerdb https://github.com/PeerDB-io/peerdb v0.37.1
+
+# Install dbt dependencies for tests
+cd "${ROOT_DIR}/tests/fixtures/dbt"
+dbt deps

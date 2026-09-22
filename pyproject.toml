@@ -45,6 +45,7 @@ filterwarnings = [
     "ignore::DeprecationWarning:dbt_common.invocation", # https://github.com/dbt-labs/dbt-core/issues/9791
     "ignore::DeprecationWarning:dbt.cli.options"        # https://github.com/dbt-labs/dbt-core/issues/12038
 ]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "dbt_packages", "vendor"]
 
 [tool.uv]
 exclude-newer = "7 days"
