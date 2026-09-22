@@ -266,7 +266,9 @@ def query_log(client: Client, pattern: str, since: datetime | None = None) -> li
     return [row[0] for row in result.result_rows]
 
 
-def create_source(client: Client, name: str, key_type: str = "UUID", snapshot_type: str = "DateTime64(9)") -> None:
+def create_source(
+    client: Client, name: str, key_type: str = "UUID", snapshot_type: str = "DateTime64(9)"
+) -> None:
     client.command(
         f"""
         create table {SCHEMA}.{name} (
@@ -750,12 +752,16 @@ from integration_tests.tests.conftest import SCHEMA, assert_failed, assert_ok
 
 def test_missing_marker_aborts(sources, seed_responses, dbt):
     result = dbt("run", "--select", "no_marker")
-    assert_failed(result, "marker -- __BUCKET_PREDICATE__ must appear exactly once in the model SQL; found 0")
+    assert_failed(
+        result, "marker -- __BUCKET_PREDICATE__ must appear exactly once in the model SQL; found 0"
+    )
 
 
 def test_duplicated_marker_aborts(sources, seed_responses, dbt):
     result = dbt("run", "--select", "two_markers")
-    assert_failed(result, "marker -- __BUCKET_PREDICATE__ must appear exactly once in the model SQL; found 2")
+    assert_failed(
+        result, "marker -- __BUCKET_PREDICATE__ must appear exactly once in the model SQL; found 2"
+    )
 
 
 def test_empty_source_builds_empty_table(sources, dbt):
@@ -902,20 +908,44 @@ import pytest
 from integration_tests.tests.conftest import assert_failed
 
 CASES = [
-    ({"bucket_key_column": None}, "bucket_key_column is required and must be a bare column identifier"),
-    ({"bucket_key_column": "bad-name"}, "bucket_key_column is required and must be a bare column identifier"),
-    ({"bucket_snapshot_column": None}, "bucket_snapshot_column is required and must be a bare column identifier"),
-    ({"bucket_snapshot_column": "key"}, "bucket_snapshot_column must be a different column from bucket_key_column"),
+    (
+        {"bucket_key_column": None},
+        "bucket_key_column is required and must be a bare column identifier",
+    ),
+    (
+        {"bucket_key_column": "bad-name"},
+        "bucket_key_column is required and must be a bare column identifier",
+    ),
+    (
+        {"bucket_snapshot_column": None},
+        "bucket_snapshot_column is required and must be a bare column identifier",
+    ),
+    (
+        {"bucket_snapshot_column": "key"},
+        "bucket_snapshot_column must be a different column from bucket_key_column",
+    ),
     ({"bucket_source_table": None}, "bucket_source_table is required and must have the form"),
-    ({"bucket_source_table": "raw_responses"}, "bucket_source_table is required and must have the form"),
+    (
+        {"bucket_source_table": "raw_responses"},
+        "bucket_source_table is required and must have the form",
+    ),
     ({"unique_key": "other"}, "unique_key must be the single bucket_key_column"),
     ({"rows_per_bucket": 0}, "rows_per_bucket must be a positive integer"),
     ({"rows_per_bucket": True}, "rows_per_bucket must be a positive integer"),
     ({"rows_per_bucket": 1.5}, "rows_per_bucket must be a positive integer"),
-    ({"on_concurrent_writes": "raise"}, 'on_concurrent_writes must be one of "warn", "error", "ignore"'),
+    (
+        {"on_concurrent_writes": "raise"},
+        'on_concurrent_writes must be one of "warn", "error", "ignore"',
+    ),
     ({"inserts_only": True}, "inserts_only is not supported"),
-    ({"incremental_strategy": "append"}, "only the delete_insert incremental strategy is supported"),
-    ({"incremental_strategy": "legacy"}, "only the delete_insert incremental strategy is supported"),
+    (
+        {"incremental_strategy": "append"},
+        "only the delete_insert incremental strategy is supported",
+    ),
+    (
+        {"incremental_strategy": "legacy"},
+        "only the delete_insert incremental strategy is supported",
+    ),
 ]
 
 
@@ -1078,7 +1108,9 @@ def test_integer_keys_build(sources, dbt, table):
     )
     assert_ok(result)
 
-    rows = sources.query(f"select toString(key), payload from {SCHEMA}.bucketed order by key").result_rows
+    rows = sources.query(
+        f"select toString(key), payload from {SCHEMA}.bucketed order by key"
+    ).result_rows
     assert rows == [("1", "a2"), ("2", "b1"), ("3", "c1")]
 
 
@@ -1124,8 +1156,12 @@ def test_source_missing_aborts(sources, dbt):
 
 
 def test_source_not_a_table_aborts(sources, seed_responses, dbt):
-    sources.command(f"create view {SCHEMA}.raw_responses_view as select * from {SCHEMA}.raw_responses")
-    result = dbt("run", "--select", "bucketed", vars={"bucket_source_table": f"{SCHEMA}.raw_responses_view"})
+    sources.command(
+        f"create view {SCHEMA}.raw_responses_view as select * from {SCHEMA}.raw_responses"
+    )
+    result = dbt(
+        "run", "--select", "bucketed", vars={"bucket_source_table": f"{SCHEMA}.raw_responses_view"}
+    )
     assert_failed(result, "must be a table, got type")
 
 
@@ -1141,7 +1177,9 @@ def test_missing_key_column_aborts(sources, seed_responses, dbt):
 
 def test_missing_snapshot_column_aborts(sources, seed_responses, dbt):
     result = dbt("run", "--select", "bucketed", vars={"bucket_snapshot_column": "missing_snapshot"})
-    assert_failed(result, 'bucket_snapshot_column "missing_snapshot" not found in bucket_source_table')
+    assert_failed(
+        result, 'bucket_snapshot_column "missing_snapshot" not found in bucket_source_table'
+    )
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1339,11 +1377,15 @@ def test_snapshot_timezone_is_preserved(sources, dbt):
     )
     flush_logs(sources)
 
-    assert query_log(sources, "toDateTime64('2026-01-01 00:00:00.000000000', 9, 'UTC')", since=started)
+    assert query_log(
+        sources, "toDateTime64('2026-01-01 00:00:00.000000000', 9, 'UTC')", since=started
+    )
 
 
 def test_snapshot_type_must_be_datetime64_9(sources, dbt):
-    sources.insert(f"{SCHEMA}.raw_responses_bad_snapshot", [(U1, "a1", "nope", 1, 0)], column_names=COLUMNS)
+    sources.insert(
+        f"{SCHEMA}.raw_responses_bad_snapshot", [(U1, "a1", "nope", 1, 0)], column_names=COLUMNS
+    )
     result = dbt(
         "run",
         "--select",
@@ -1353,7 +1395,9 @@ def test_snapshot_type_must_be_datetime64_9(sources, dbt):
             "bucket_source_table": f"{SCHEMA}.raw_responses_bad_snapshot",
         },
     )
-    assert_failed(result, 'bucket_snapshot_column "_peerdb_synced_at" has unsupported type "String"')
+    assert_failed(
+        result, 'bucket_snapshot_column "_peerdb_synced_at" has unsupported type "String"'
+    )
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1543,14 +1587,18 @@ def seed_slow(sources):
 def target_rows(sources):
     return {
         row[0]: row[1]
-        for row in sources.query(f"select toString(key), payload from {SCHEMA}.bucketed_slow").result_rows
+        for row in sources.query(
+            f"select toString(key), payload from {SCHEMA}.bucketed_slow"
+        ).result_rows
     }
 
 
 def test_error_stops_before_publish(sources, seed_slow, dbt):
     assert_ok(dbt("run", "--select", "bucketed_slow", vars={"on_concurrent_writes": "ignore"}))
 
-    with BackgroundWriter(sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"):
+    with BackgroundWriter(
+        sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"
+    ):
         result = dbt(
             "run",
             "--full-refresh",
@@ -1566,7 +1614,9 @@ def test_error_stops_before_publish(sources, seed_slow, dbt):
 def test_warn_publishes_and_excludes_the_write(sources, seed_slow, dbt):
     assert_ok(dbt("run", "--select", "bucketed_slow", vars={"on_concurrent_writes": "ignore"}))
 
-    with BackgroundWriter(sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"):
+    with BackgroundWriter(
+        sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"
+    ):
         result = dbt(
             "run",
             "--full-refresh",
@@ -1582,7 +1632,9 @@ def test_warn_publishes_and_excludes_the_write(sources, seed_slow, dbt):
 
 def test_ignore_skips_the_detection_query(sources, seed_slow, dbt):
     started = datetime.now()
-    with BackgroundWriter(sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"):
+    with BackgroundWriter(
+        sources, "raw_responses_slow", U1, wait_for="_peerdb_synced_at <= toDateTime64"
+    ):
         result = dbt("run", "--select", "bucketed_slow", vars={"on_concurrent_writes": "ignore"})
 
     assert_ok(result)
@@ -1738,7 +1790,9 @@ def test_backup_is_dropped_after_publish(sources, seed_responses, dbt):
 
 
 def test_pre_and_post_hooks_run(sources, seed_responses, dbt):
-    sources.command(f"create table {SCHEMA}.hook_log (event String) engine = MergeTree() order by event")
+    sources.command(
+        f"create table {SCHEMA}.hook_log (event String) engine = MergeTree() order by event"
+    )
     result = dbt(
         "run",
         "--select",
