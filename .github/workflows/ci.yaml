@@ -24,11 +24,18 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Install Python dependencies
+        run: uv sync --locked --all-extras --dev
 
-      - name: Run linter
-        run: uv run --frozen ruff check --config pyproject.toml
+      - name: Cache dbt packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tests/fixtures/dbt/dbt_packages
+          key: dbt-packages-${{ runner.os }}-${{ hashFiles('tests/fixtures/dbt/dependencies.yml') }}
 
-      - name: Run tests
+      - name: Run dbt deps
+        working-directory: tests/fixtures/dbt
+        run: uv run --frozen dbt deps
+
+      - name: Run Python tests
         run: uv run --frozen pytest
