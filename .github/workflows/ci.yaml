@@ -38,6 +38,7 @@ jobs:
     needs: [pre-commit]
     permissions: {}
     env:
+      CLICKHOUSE_VERSION: 26.3.33.24
       DO_NOT_TRACK: 1
       TZ: Africa/Johannesburg
     steps:
@@ -59,13 +60,13 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.clickhouse
-          key: clickhouse-${{ runner.os }}-26.3.33.24
+          key: clickhouse-${{ runner.os }}-${{ env.CLICKHOUSE_VERSION }}
 
       - name: Install ClickHouse server
-        run: uv run --frozen clickhousectl local install 26.3.33.24
+        run: uv run --frozen clickhousectl local install $CLICKHOUSE_VERSION
 
       - name: Start ClickHouse server
-        run: uv run --frozen clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
+        run: uv run --frozen clickhousectl local server start --version $CLICKHOUSE_VERSION --http-port 18123 --tcp-port 19000
 
       - name: Wait for ClickHouse
         run: |
