@@ -9,7 +9,7 @@ dbt helpers for PeerDB-replicated ClickHouse tables.
     ```yaml
     packages:
       - package: https://github.com/netbek/dbt_peerdb
-        version: 0.0.9
+        version: 0.0.10
     ```
 
 2. Configure the package in your `dbt_project.yml`:
