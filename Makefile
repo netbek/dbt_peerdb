@@ -145,7 +145,7 @@ lint:
 # ==============================================================================
 
 clickhouse-start:
-	clickhousectl local server start --version 26.3.33.131 --http-port 18123 --tcp-port 19000
+	clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
 
 clickhouse-stop:
 	clickhousectl local server stop

@@ -59,13 +59,13 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.clickhouse
-          key: clickhouse-${{ runner.os }}-26.3.33.131
+          key: clickhouse-${{ runner.os }}-26.3.33.24
 
       - name: Install ClickHouse server
-        run: uv run --frozen clickhousectl local install 26.3.33.131
+        run: uv run --frozen clickhousectl local install 26.3.33.24
 
       - name: Start ClickHouse server
-        run: uv run --frozen clickhousectl local server start --version 26.3.33.131 --http-port 18123 --tcp-port 19000
+        run: uv run --frozen clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
 
       - name: Wait for ClickHouse
         run: |

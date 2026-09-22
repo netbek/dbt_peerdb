@@ -15,12 +15,12 @@ Load any skill below with the `skill` tool by name (e.g., `skill find-skills`), 
 ## ClickHouse
 
 Use `.venv/bin/clickhousectl` to start and stop ClickHouse server, and to connect and query running server.
-Always set `TZ` environment variable. Always use ClickHouse v26.3.33.131.
+Always set `TZ` environment variable. Always use ClickHouse v26.3.33.24.
 
 | Action | Command |
 |--------|---------|
-| Install server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local install 26.3.33.131` |
-| Start server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.131 --http-port 18123 --tcp-port 19000` |
+| Install server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local install 26.3.33.24` |
+| Start server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000` |
 | Stop server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local server stop` |
 | Connect to server | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local client --port 19000` |
 | Run query | `TZ=Africa/Johannesburg .venv/bin/clickhousectl local client --port 19000 --query "select version()"` |
@@ -31,7 +31,7 @@ Use `.venv/bin/pytest` to run integration and unit tests. Tests depend on runnin
 
 ```shell
 # Start ClickHouse server
-TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.131 --http-port 18123 --tcp-port 19000
+TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
 
 # Run tests
 .venv/bin/pytest -s
