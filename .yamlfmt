@@ -1,0 +1,8 @@
+exclude:
+  - pnpm-lock.yaml
+
+formatter:
+  type: basic
+  drop_merge_tag: true
+  force_quote_style: double
+  retain_line_breaks_single: true

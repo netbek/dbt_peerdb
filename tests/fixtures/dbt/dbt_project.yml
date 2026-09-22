@@ -1,0 +1,23 @@
+name: example
+version: 1.0.0
+
+profile: example
+
+model-paths: [models]
+analysis-paths: [analyses]
+test-paths: [tests]
+seed-paths: [seeds]
+macro-paths: [macros]
+snapshot-paths: [snapshots]
+clean-targets: [logs, target, dbt_packages]
+
+flags:
+  fail_fast: true
+  partial_parse: true
+  send_anonymous_usage_stats: false
+  use_colors: true
+
+models:
+  example:
+    example:
+      +materialized: view

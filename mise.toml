@@ -24,8 +24,9 @@ DISABLE_TELEMETRY = "1"
 [hooks.enter]
 run = """
 mise install --quiet
+uv sync --all-extras --all-groups --quiet
 mise run pnpm-install
-# if [ -d .git ]; then pre-commit install --overwrite > /dev/null 2>&1; fi
+if [ -d .git ]; then pre-commit install --overwrite > /dev/null 2>&1; fi
 """
 
 [tasks.pnpm-install]

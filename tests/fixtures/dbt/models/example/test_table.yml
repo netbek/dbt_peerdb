@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: test_table
+    description: Test table
+    columns:
+      - name: uint64
+        description: Short description
+        data_type: UInt64
+      - name: int64
+        data_type: Int64
+      - name: uint32
+        description: |-
+          Description that spans
+          Multiple lines in a row,
+
+          Brief thoughts take their shape.
+        data_type: UInt32
+      - name: int32
+        data_type: Int32
+      - name: uint16
+        data_type: UInt16
+      - name: int16
+        data_type: Int16
+      - name: uint8
+        data_type: UInt8
+      - name: int8
+        data_type: Int8
+      - name: decimal256
+        data_type: Decimal(76, 1)
+      - name: decimal128
+        data_type: Decimal(38, 1)
+      - name: decimal64
+        data_type: Decimal(18, 1)
+      - name: decimal32
+        data_type: Decimal(9, 1)
+      - name: decimal
+        data_type: Decimal(10, 0)
+      - name: float64
+        data_type: Float64
+      - name: float32
+        data_type: Float32
+      - name: bool
+        data_type: Bool
+      - name: nullable_bool
+        data_type: Nullable(Bool)
+      - name: date32
+        data_type: Date32
+      - name: datetime
+        data_type: DateTime
+      - name: nullable(datetime)
+        data_type: Nullable(DateTime)
+      - name: datetime64
+        data_type: DateTime64(9)
+      - name: nullable_datetime64
+        data_type: Nullable(DateTime64(9))
+      - name: string
+        data_type: String
+      - name: nullable_string
+        data_type: Nullable(String)
+      - name: uuid
+        data_type: UUID
+      - name: nullable_uuid
+        data_type: Nullable(UUID)
+      - name: _peerdb_synced_at
+        data_type: DateTime64(9)
+      - name: _peerdb_is_deleted
+        data_type: Int8
+      - name: _peerdb_version
+        data_type: Int64

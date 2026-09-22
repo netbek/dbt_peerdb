@@ -32,3 +32,14 @@ updates:
       include: scope
     cooldown:
       default-days: 7
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: daily
+    target-branch: main
+    commit-message:
+      prefix: fix
+      include: scope
+    cooldown:
+      default-days: 7

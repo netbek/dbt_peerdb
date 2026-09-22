@@ -3,3 +3,11 @@ version: 0.0.8
 config-version: 2
 require-dbt-version: [">=1.3.0", "<1.12.0"]
 profile: dbt_peerdb
+
+# Package only ships macros. Keep dbt from scanning the repo's pytest
+# tests/ tree as schema files when installed as a local package.
+model-paths: []
+analysis-paths: []
+test-paths: []
+seed-paths: []
+snapshot-paths: []

@@ -5,3 +5,47 @@ description = "dbt helpers for PeerDB-replicated ClickHouse tables"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = []
+
+[dependency-groups]
+dev = [
+    "docker>=7.2.0",
+    "netbek-dw-lib[clickhouse,dbt]>=1.36.8",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-docker>=3.2.5",
+    "ruff>=0.16.7",
+    "ty>=0.0.80",
+]
+
+[tool.isort]
+force_alphabetical_sort = true
+line_length = 100
+profile = "black"
+py_version = 313
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["./vendor"]
+
+[tool.ruff.lint]
+ignore = [
+    "D100", "D101", "D102", "D103", "D104", "D107", "D205",
+    # Rule is ignored for ruff >= 0.16. TODO Configure isort and ruff to work together.
+    "I001"
+]
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.pytest]
+addopts = ["-x", "--no-header", "--container-scope=module", "--ignore=vendor"]
+filterwarnings = [
+    "ignore:The 'u' type code is deprecated:DeprecationWarning", # Caused by clickhouse_connect
+    "ignore::DeprecationWarning:dbt_common.invocation", # https://github.com/dbt-labs/dbt-core/issues/9791
+    "ignore::DeprecationWarning:dbt.cli.options"        # https://github.com/dbt-labs/dbt-core/issues/12038
+]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "dbt_packages", "vendor"]
+
+[tool.uv]
+exclude-newer = "7 days"
