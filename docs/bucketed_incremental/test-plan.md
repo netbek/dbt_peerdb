@@ -196,13 +196,14 @@ query_log: detection queries (E1/E3/E5) ≈ 1; E4 = 0 (spec: “one additional m
    - `TestPublishFailure` (D9–D11)
    - `TestConcurrentWrites` (E)
    - `TestIncremental` (F)
-4. Start ClickHouse, run the suite, then stop the server (per `AGENTS.md`; `TZ` always set; port `18123` matches `profiles.yml`):
+4. Start ClickHouse, run the suite, then stop the server (per `AGENTS.md`; set `TZ` once per shell; port `18123` matches `profiles.yml`):
    ```shell
-   TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
+   export TZ=Africa/Johannesburg
+   .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
    .venv/bin/pytest -s tests/test_bucketed_incremental.py
    # then the full suite plus `ruff`/`ty` per repo config
    .venv/bin/pytest -s
-   TZ=Africa/Johannesburg .venv/bin/clickhousectl local server stop
+   .venv/bin/clickhousectl local server stop
    ```
 5. CI needs no changes (ClickHouse provisioned via `clickhousectl` + `.venv/bin/pytest` already wired; no `docker` / `pytest-docker` dependencies).
 
@@ -235,4 +236,4 @@ query_log: detection queries (E1/E3/E5) ≈ 1; E4 = 0 (spec: “one additional m
 | Edit | `tests/fixtures/dbt/dbt_project.yml` |
 | Delete | `tests/test_example.py`, `tests/fixtures/dbt/models/example/*`, `tests/fixtures/dbt/seeds/my_first_dbt_seed.csv` |
 | Unchanged | `tests/conftest.py`, `profiles.yml`, CI, `dependencies.yml`, macros |
-| Prerequisite (not a repo file) | ClickHouse `26.3.33.24` via `clickhousectl` (`TZ` always set), ports `18123`/`19000` |
+| Prerequisite (not a repo file) | ClickHouse `26.3.33.24` via `clickhousectl` (`TZ` set once per shell), ports `18123`/`19000` |
