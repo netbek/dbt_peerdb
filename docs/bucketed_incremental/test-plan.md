@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-A pytest suite that exercises the `bucketed_incremental` materialization end-to-end against the real ClickHouse container, covering every scenario in `docs/bucketed_incremental/spec.md` and the error reference in `design.md`, using the existing `IntegrationTest` / `Dbt` / `ClickHouseAdapter` harness unchanged.
+A pytest suite that exercises the `bucketed_incremental` materialization end-to-end against the real ClickHouse server (started via `clickhousectl` per `AGENTS.md`), covering every scenario in `docs/bucketed_incremental/spec.md` and the error reference in `design.md`, using the existing `IntegrationTest` / `Dbt` / `ClickHouseAdapter` harness unchanged.
 
 ## 2. Test architecture
 
@@ -11,9 +11,8 @@ A pytest suite that exercises the `bucketed_incremental` materialization end-to-
 ```
 tests/
   conftest.py                          # unchanged (IntegrationTest, Dbt, ClickHouseAdapter)
-  docker-compose.yml                   # unchanged
   bucketed_utils.py                    # NEW: helpers (not collected by pytest)
-  test_bucketed_incremental.py         # NEW: all test classes (single module = one container lifecycle)
+  test_bucketed_incremental.py         # NEW: all test classes in one module (keeps the suite navigable)
   fixtures/
     .dbt/profiles.yml                  # unchanged (use_lw_deletes: true already set)
     dbt/
@@ -24,7 +23,7 @@ tests/
       (remove models/example/*, seeds/my_first_dbt_seed.csv, test_example.py)
 ```
 
-Rationale for a **single test module**: `--container-scope=module` and module-scoped docker fixtures mean one module = one container up/down. Multiple modules would restart the stack repeatedly. Helpers live in `bucketed_utils.py` so the test file stays navigable.
+Rationale for a **single test module**: keeps the suite navigable with helpers in `bucketed_utils.py`. ClickHouse runs externally via `clickhousectl`, so there is no container lifecycle tied to test modules.
 
 `test_example.py` is removed: its models/seeds are replaced, so it would fail.
 
@@ -68,7 +67,7 @@ Each test builds its own source with a unique name or a fresh drop/create.
 | Relation state | `system.tables` / `adapter.has_table`; leftover `__dbt_tmp` / `__dbt_backup` absence |
 | `system.query_log` | design requires it (bucket predicates, `EXCHANGE TABLES`, detection-query counts) |
 
-**Enabling `log_queries` without touching docker-compose**: a session fixture runs `ALTER USER default SETTINGS log_queries = 1` once per module, then `SYSTEM FLUSH LOGS` before each query_log read. Filters: `query_start_time >= test boundary` AND query text contains a distinctive fragment (model/source name). This fulfills the design’s “log_queries on” requirement inside test code, leaving infra untouched.
+**Enabling `log_queries` without server config changes**: a session fixture runs `ALTER USER default SETTINGS log_queries = 1` once per module, then `SYSTEM FLUSH LOGS` before each query_log read. Filters: `query_start_time >= test boundary` AND query text contains a distinctive fragment (model/source name). This fulfills the design's “log_queries on” requirement inside test code, leaving server config untouched.
 
 ### 2.6 Mid-build writer (design’s concurrency test)
 
@@ -197,16 +196,23 @@ query_log: detection queries (E1/E3/E5) ≈ 1; E4 = 0 (spec: “one additional m
    - `TestPublishFailure` (D9–D11)
    - `TestConcurrentWrites` (E)
    - `TestIncremental` (F)
-4. Run `uv run --frozen pytest tests/test_bucketed_incremental.py`, then full `uv run --frozen pytest` and `ruff`/`ty` per repo config.
-5. CI needs no changes (`dbt deps` + `pytest` already wired).
+4. Start ClickHouse, run the suite, then stop the server (per `AGENTS.md`; `TZ` always set; port `18123` matches `profiles.yml`):
+   ```shell
+   TZ=Africa/Johannesburg .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
+   .venv/bin/pytest -s tests/test_bucketed_incremental.py
+   # then the full suite plus `ruff`/`ty` per repo config
+   .venv/bin/pytest -s
+   TZ=Africa/Johannesburg .venv/bin/clickhousectl local server stop
+   ```
+5. CI needs no changes (ClickHouse provisioned via `clickhousectl` + `.venv/bin/pytest` already wired; no `docker` / `pytest-docker` dependencies).
 
 ## 5. Risks and decisions
 
 | Risk | Mitigation |
 |------|------------|
-| `log_queries` off in docker-compose | `ALTER USER default SETTINGS log_queries=1` in a module fixture + `SYSTEM FLUSH LOGS`; no compose edit |
+| `log_queries` off by default on the `clickhousectl` server | `ALTER USER default SETTINGS log_queries=1` in a module fixture + `SYSTEM FLUSH LOGS`; no server config edit |
 | Concurrency test flake | Writer keyed off `system.processes` seeing the bucket query; generous `sleepEachRow`; hard 30s writer timeout |
-| Single test file size (~1k lines) | Classes per spec layer; helpers externalized; accepted for one-container economy |
+| Single test file size (~1k lines) | Classes per spec layer; helpers externalized; accepted for navigability |
 | C8/unreachable “no usable maximum” | Excluded; noted in module docstring as unreachable under current dtype validation |
 | `1.0` as `rows_per_bucket` | Macro accepts whole floats (`1.0|int == 1.0` is false); do **not** assert it errors; use `1.5` for the non-integer case |
 | query_log cross-test bleed | Time-window filter + distinctive query fragments |
@@ -228,4 +234,5 @@ query_log: detection queries (E1/E3/E5) ≈ 1; E4 = 0 (spec: “one additional m
 | Add | `tests/fixtures/dbt/models/bucketed/bucketed_model.sql` (+ optional schema yml) |
 | Edit | `tests/fixtures/dbt/dbt_project.yml` |
 | Delete | `tests/test_example.py`, `tests/fixtures/dbt/models/example/*`, `tests/fixtures/dbt/seeds/my_first_dbt_seed.csv` |
-| Unchanged | `tests/conftest.py`, `docker-compose.yml`, `profiles.yml`, CI, `dependencies.yml`, macros |
+| Unchanged | `tests/conftest.py`, `profiles.yml`, CI, `dependencies.yml`, macros |
+| Prerequisite (not a repo file) | ClickHouse `26.3.33.24` via `clickhousectl` (`TZ` always set), ports `18123`/`19000` |
