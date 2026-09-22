@@ -1,3 +1,6 @@
+exclude:
+  - pnpm-lock.yaml
+
 formatter:
   type: basic
   drop_merge_tag: true
