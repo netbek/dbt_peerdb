@@ -15,9 +15,6 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Docker Compose
-        uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2.3.0
-
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -27,7 +24,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked --all-extras --dev
 
-      - name: Cache pre-commit hooks
+      - name: Cache pre-commit environment
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
@@ -40,14 +37,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [pre-commit]
     permissions: {}
+    env:
+      CLICKHOUSE_VERSION: 26.3.33.24
+      DO_NOT_TRACK: 1
+      TZ: Africa/Johannesburg
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
-
-      - name: Set up Docker Compose
-        uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2.3.0
 
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -57,6 +55,25 @@ jobs:
 
       - name: Install Python dependencies
         run: uv sync --locked --all-extras --dev
+
+      - name: Cache ClickHouse binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.clickhouse
+          key: clickhouse-${{ runner.os }}-${{ env.CLICKHOUSE_VERSION }}
+
+      - name: Install ClickHouse server
+        run: uv run --frozen clickhousectl local install $CLICKHOUSE_VERSION
+
+      - name: Start ClickHouse server
+        run: uv run --frozen clickhousectl local server start --version $CLICKHOUSE_VERSION --http-port 18123 --tcp-port 19000
+
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 30); do
+            uv run --frozen clickhousectl local client --port 19000 --query "SELECT version()" && break
+            sleep 1
+          done
 
       - name: Cache dbt packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -70,3 +87,7 @@ jobs:
 
       - name: Run Python tests
         run: uv run --frozen pytest
+
+      - name: Stop ClickHouse server
+        if: always()
+        run: uv run --frozen clickhousectl local server stop || true

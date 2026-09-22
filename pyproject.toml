@@ -8,11 +8,10 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "docker>=7.2.0",
+    "clickhousectl>=0.4.2",
     "netbek-dw-lib[clickhouse,dbt]>=1.36.8",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
-    "pytest-docker>=3.2.5",
     "ruff>=0.16.7",
     "ty>=0.0.80",
 ]
@@ -39,7 +38,7 @@ ignore = [
 include = ["src", "tests"]
 
 [tool.pytest]
-addopts = ["-x", "--no-header", "--container-scope=module", "--ignore=vendor"]
+addopts = ["-x", "--no-header", "--ignore=vendor"]
 filterwarnings = [
     "ignore:The 'u' type code is deprecated:DeprecationWarning", # Caused by clickhouse_connect
     "ignore::DeprecationWarning:dbt_common.invocation", # https://github.com/dbt-labs/dbt-core/issues/9791
@@ -49,3 +48,4 @@ norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules"
 
 [tool.uv]
 exclude-newer = "7 days"
+python-preference = "only-managed"

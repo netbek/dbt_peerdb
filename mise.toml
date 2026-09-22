@@ -17,6 +17,9 @@ python.uv_venv_auto = "create|source"
 
 [env]
 _.path = ["{{config_root}}/node_modules/.bin"]
+# Install uv-managed Python inside the repo so .venv never links to a user or system Python
+UV_PYTHON_INSTALL_DIR = "{{config_root}}/vendor/python"
+# https://clickhouse.com/docs/concepts/features/interfaces/cli#telemetry
 DO_NOT_TRACK = "1"
 # https://github.com/vercel-labs/skills/blob/v1.5.16/README.md#environment-variables
 DISABLE_TELEMETRY = "1"
