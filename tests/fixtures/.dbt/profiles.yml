@@ -6,8 +6,8 @@ example:
       threads: 1
       host: localhost
       port: 18123
-      user: default
-      password: default
+      # user: default
+      # password: default
       schema: default
       driver: http
       secure: false

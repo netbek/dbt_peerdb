@@ -1,4 +1,5 @@
 __pycache__
+.clickhouse
 .pytest_cache
 .ruff_cache
 .venv

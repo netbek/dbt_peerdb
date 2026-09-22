@@ -13,7 +13,13 @@ endif
 # ==============================================================================
 
 install:
-	@./scripts/install.sh
+	@echo "$(YELLOW)Installing...$(RESET)"
+	@./scripts/install-node.sh
+	@./scripts/install-python.sh
+	@./scripts/install-precommit.sh
+	@./scripts/install-skills.sh
+	@./scripts/install-dbt.sh
+	@./scripts/install-vendor.sh
 
 deps-scan:
 	@echo "$(YELLOW)Scanning root lockfiles for vulnerabilities...$(RESET)"
@@ -26,7 +32,7 @@ repo-scan:
 
 node-install:
 	@echo "$(YELLOW)Installing Node dependencies...$(RESET)"
-	rm -fr node_modules && pnpm install
+	@./scripts/install-node.sh
 
 node-outdated:
 	@echo "$(YELLOW)Listing outdated Node dependencies...$(RESET)"
@@ -66,7 +72,7 @@ endif
 
 python-install:
 	@echo "$(YELLOW)Installing Python dependencies...$(RESET)"
-	rm -fr .venv && uv sync --all-extras --all-groups
+	@./scripts/install-python.sh
 
 python-outdated:
 	@echo "$(YELLOW)Listing outdated Python dependencies...$(RESET)"
@@ -116,7 +122,7 @@ skills-uninstall:
 	pnpm exec skills-manager uninstall
 
 # ==============================================================================
-# FORMAT
+# DEVELOPMENT
 # ==============================================================================
 
 autoflake:
@@ -130,13 +136,22 @@ format:
 	pre-commit run isort --all-files
 	pre-commit run ruff-format --all-files
 
-# ==============================================================================
-# LINT
-# ==============================================================================
-
 lint:
 	@echo "Linting code..."
 	pre-commit run ruff-check --hook-stage manual --all-files
+
+# ==============================================================================
+# CLICKHOUSE
+# ==============================================================================
+
+clickhouse-start:
+	clickhousectl local server start --version 26.3.33.131 --http-port 18123 --tcp-port 19000
+
+clickhouse-stop:
+	clickhousectl local server stop
+
+clickhouse-remove:
+	clickhousectl local server remove
 
 # ==============================================================================
 # RELEASE
