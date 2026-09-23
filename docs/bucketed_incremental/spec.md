@@ -8,20 +8,25 @@ The `bucketed_incremental` materialization builds and maintains large ClickHouse
 
 ### Requirement: Incremental Detection
 
-`is_incremental()` SHALL treat `bucketed_incremental` like the built-in incremental materializations: it reports true only when the target relation is a table, the model uses an incremental materialization, and the run is not a full refresh.
+`dbt_peerdb.is_incremental()` SHALL treat `bucketed_incremental` like the built-in incremental materializations: it reports true only when the target relation is a table, the model uses an incremental materialization, and the run is not a full refresh.
 
 #### Scenario: First run
 - **WHEN** the target relation does not exist
-- **THEN** `is_incremental()` returns false
+- **THEN** `dbt_peerdb.is_incremental()` returns false
 
 #### Scenario: Later run
 - **WHEN** the target is a table, the model is materialized as `bucketed_incremental`, and the run is not a full refresh
-- **THEN** `is_incremental()` returns true
+- **THEN** `dbt_peerdb.is_incremental()` returns true
 
 #### Scenario: Full refresh
 - **WHEN** the run requests a full refresh, for example with `--full-refresh`
-- **THEN** `is_incremental()` returns false
+- **THEN** `dbt_peerdb.is_incremental()` returns false
 - **AND** the materialization uses the bucketed full-refresh path
+
+#### Scenario: Package-qualified call
+- **WHEN** a model calls `is_incremental()` without the package qualifier
+- **THEN** the call resolves to the adapter or global macro, which do not recognise `bucketed_incremental`, and returns false on every run
+- **AND** models SHALL detect incremental runs with `dbt_peerdb.is_incremental()`
 
 ### Requirement: Bucketed Full Refresh
 
@@ -84,10 +89,6 @@ The materialization SHALL treat a source with no rows as an empty build, not an 
 - **WHEN** `bucket_source_table` contains no rows
 - **THEN** the materialization builds an empty table with a `where 1 = 0` predicate in place of the marker
 - **AND** it publishes that table through the normal publish step
-
-#### Scenario: Rows without a snapshot maximum
-- **WHEN** the source contains rows but the captured snapshot maximum is empty
-- **THEN** the run stops with a compiler error
 
 ### Requirement: Configuration Validation
 

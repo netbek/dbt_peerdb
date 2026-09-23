@@ -1,0 +1,7 @@
+version: 2
+
+sources:
+  - name: bi
+    schema: default
+    tables:
+      - name: bi_source

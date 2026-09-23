@@ -60,6 +60,10 @@ What your model must do:
 - Set `rows_per_bucket` (default 1000000, a positive whole number) to size
   the buckets: the bucket count is the source row count divided by this
   number, rounded up. Lower it if a single bucket exhausts memory.
+- Call `dbt_peerdb.is_incremental()` to detect incremental runs, as in the
+  example. dbt resolves a plain `is_incremental()` from the root project or
+  the adapter's global macros, which do not recognise `bucketed_incremental`,
+  so the plain call compiles the full-history branch on every run.
 
 Example model:
 
@@ -77,7 +81,7 @@ Example model:
 ) }}
 
 with
-{% if is_incremental() %}
+{% if dbt_peerdb.is_incremental() %}
 watermark as (
     select coalesce(
         max(_peerdb_synced_at),
@@ -96,7 +100,7 @@ changed_keys as (
 raw_versions as (
     select id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
     from {{ source('my_database', 'my_table') }}
-    {% if is_incremental() %}
+    {% if dbt_peerdb.is_incremental() %}
     -- All versions of each touched key, so late versions dedupe correctly.
     where id in (select id from changed_keys)
     {% else %}

@@ -125,13 +125,20 @@
           ~ '" must be a table, got type "' ~ bucket_relation.type ~ '".'
       ) }}
     {% endif %}
-    {% set ns = namespace(bucket_dtype=none, snapshot_dtype=none) %}
+    {% set ns = namespace(
+        bucket_dtype=none, bucket_wrapped=false, snapshot_dtype=none, snapshot_wrapped=false
+    ) %}
     {% for col in adapter.get_columns_in_relation(bucket_relation) %}
+      {#- ClickHouseColumn strips Nullable/LowCardinality from dtype into flags;
+          data_type re-wraps them for the error messages, while the flags reject
+          wrappers regardless of adapter data_type behaviour. -#}
       {% if col.name == bucket_key_column %}
-        {% set ns.bucket_dtype = col.dtype %}
+        {% set ns.bucket_dtype = col.data_type %}
+        {% set ns.bucket_wrapped = col.is_nullable or col.is_low_cardinality %}
       {% endif %}
       {% if col.name == bucket_snapshot_column %}
-        {% set ns.snapshot_dtype = col.dtype %}
+        {% set ns.snapshot_dtype = col.data_type %}
+        {% set ns.snapshot_wrapped = col.is_nullable or col.is_low_cardinality %}
       {% endif %}
     {% endfor %}
     {% if ns.bucket_dtype is none %}
@@ -140,7 +147,13 @@
           ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
       ) }}
     {% endif %}
-    {% if ns.bucket_dtype == 'UUID' %}
+    {% if ns.bucket_wrapped %}
+      {{ exceptions.raise_compiler_error(
+          'bucketed_incremental: bucket_key_column "' ~ bucket_key_column
+          ~ '" has unsupported type "' ~ ns.bucket_dtype
+          ~ '"; expected a non-null UUID, signed integer or unsigned integer column.'
+      ) }}
+    {% elif ns.bucket_dtype == 'UUID' %}
       {% set bucket_key_type = 'uuid' %}
     {% elif ns.bucket_dtype in ('Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256') %}
       {% set bucket_key_type = 'int' %}
@@ -164,7 +177,7 @@
           ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
       ) }}
     {% endif %}
-    {% if not modules.re.match("^DateTime64[(]9(, *'[^']+')?[)]$", ns.snapshot_dtype) %}
+    {% if ns.snapshot_wrapped or not modules.re.match("^DateTime64[(]9(, *'[^']+')?[)]$", ns.snapshot_dtype) %}
       {{ exceptions.raise_compiler_error(
           'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
           ~ '" has unsupported type "' ~ ns.snapshot_dtype
@@ -210,6 +223,10 @@
       {% endif %}
     {% endif %}
     {% set snapshot_str = count_result.columns[snapshot_idx].values()[0] %}
+    {#- Defensive: a non-null DateTime64(9) column always yields a maximum (the
+        epoch at the earliest, even for an empty table), and nullable or wrapped
+        columns are rejected in the probe, so this guard is unreachable through
+        the public contract (see integration-test-implementation F6). -#}
     {% if snapshot_str is none or snapshot_str|trim|length == 0 %}
       {% set snapshot_str = none %}
     {% endif %}

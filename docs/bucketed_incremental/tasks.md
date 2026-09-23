@@ -1,5 +1,12 @@
 # bucketed_incremental Implementation Plan
 
+> **Status: superseded.** This plan rebuilt the materialization and specified a
+> Docker-based harness in `integration_tests/`. The implemented materialization
+> and the current suite (fixture project `tests/fixtures/dbt`, local ClickHouse
+> via `clickhousectl`) are documented in `integration-test-plan.md` and
+> `integration-test-implementation.md`. The task list below is kept for history;
+> do not follow it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebuild the `bucketed_incremental` ClickHouse materialization from the spec, with a Docker-backed integration test suite that proves every requirement.

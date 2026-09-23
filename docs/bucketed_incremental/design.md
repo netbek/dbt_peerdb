@@ -144,7 +144,7 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | `inserts_only` | No | `false` | Must be false |
 | `on_schema_change` | No | `ignore` | `ignore`, `fail`, `append_new_columns`, `sync_all_columns` |
 | `predicates`, `incremental_predicates` | No | `[]` | Passed to the delete+insert step |
-| `partition_by` | No | – | Passed to `validate_incremental_strategy` |
+| `partition_by` | No | – | Passed to `validate_incremental_strategy`; the adapter's create table also emits it as `PARTITION BY` |
 | `engine`, `order_by`, `contract`, `grants`, `indexes`, `docs` | No | – | Standard DDL and lifecycle configs; unchanged by this materialization |
 
 The profile needs `use_lw_deletes: true`. Without the opt-in the adapter resolves the default strategy to `legacy`, which the materialization rejects. The adapter must also be able to enable `allow_nondeterministic_mutations` for its session; a user constrained against `SET` needs the setting in its profile. ClickHouse enforces the setting only on Replicated engines, where it rejects the delete's `IN (SELECT ...)` predicate.
@@ -170,7 +170,7 @@ The profile needs `use_lw_deletes: true`. Without the opt-in the adapter resolve
 | Snapshot column missing from the source | `bucket_snapshot_column "<column>" not found in bucket_source_table "<table>"` |
 | Snapshot dtype is not `DateTime64(9)` | `bucket_snapshot_column "<column>" has unsupported type "<dtype>"; it must be a non-null DateTime64(9) column` |
 | Negative integer keys | `bucket_source_table "<table>" has <n> negative values in "<column>". Negative integer keys cannot be bucketed (the bucket maths uses modulo), so a full refresh would silently drop them` |
-| No usable snapshot maximum | `bucket_snapshot_column "<column>" has no usable maximum in bucket_source_table "<table>"` |
+| No usable snapshot maximum (defensive; unreachable for a non-null `DateTime64(9)` column) | `bucket_snapshot_column "<column>" has no usable maximum in bucket_source_table "<table>"` |
 | Concurrent write detected with `error` | `concurrent writes to bucket_source_table "<table>" detected during the rebuild (snapshot bound <S0> exceeded). Re-run against a quiesced source; the previous table was left untouched` |
 
 Every message carries the `bucketed_incremental:` prefix.
@@ -272,7 +272,7 @@ Every message carries the `bucketed_incremental:` prefix.
 
 ## Test strategy
 
-The integration harness runs a real ClickHouse server in Docker with `log_queries` on and the database engine that supports atomic exchange. A dbt project in `integration_tests/` includes this package by local path, seeds source tables, and exercises one parametrized model whose config values come from `--vars`.
+The integration harness runs ClickHouse 26.3.33.24 as a local server managed by `clickhousectl` (HTTP `18123`, TCP `19000`) on the default Atomic database engine, which supports `EXCHANGE TABLES`; `scripts/install-clickhouse.sh` enables query logging. The pytest suite in `tests/` drives a fixture dbt project at `tests/fixtures/dbt` that includes this package by local path. Every scenario has its own model file: distinct `--vars` values invalidate dbt's partial-parse cache, so fixed per-model configs are cheaper than one parametrized model.
 
 | Layer | Scope | Examples |
 |-------|-------|---------|
@@ -281,7 +281,7 @@ The integration harness runs a real ClickHouse server in Docker with `log_querie
 | Contract | Snapshot bound, detection modes | `<=` bounds on every bucket query; mid-build writer test |
 | Incremental | Delete+insert, schema change, watermark tie | Only touched keys replaced; a row stamped `S0` recaptured |
 
-Tests assert observable effects: table contents, stdout run logs, and `system.query_log` entries after `SYSTEM FLUSH LOGS`. The concurrency test slows bucket zero with `sleepEachRow` and writes to the source from a background thread that waits for a bucket query to appear in `system.processes`, so the write always lands between the count query and the detection query.
+`tests/helpers.py` captures both observable effects per run: the dbt log tail and the statements in `system.query_log` since a server timestamp marker, read after `SYSTEM FLUSH LOGS` and filtered of the harness's own reads and the adapter's atomic-exchange probe. The concurrency tests slow the build with `sleepEachRow` (pinned to one thread), and `LateWriter` runs a background thread that polls `system.processes` for that query, then inserts a row stamped with `now64(9)`, so the write always lands between the count query and the detection query.
 
 ## Open questions
 
@@ -293,5 +293,7 @@ Tests assert observable effects: table contents, stdout run logs, and `system.qu
 
 - `README.md` in this package: user-facing description and model example.
 - `docs/bucketed_incremental/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
+- `docs/bucketed_incremental/integration-test-plan.md`: suite scope, fixture layout and test matrix.
+- `docs/bucketed_incremental/integration-test-implementation.md`: implemented harness, findings and coverage.
 - Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.2).
 - Adapter strategy resolution and validation: `vendor/dbt-clickhouse/dbt/adapters/clickhouse/impl.py`.
