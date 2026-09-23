@@ -155,8 +155,8 @@ def create_source(
     include_key: bool = True,
     include_snapshot: bool = True,
 ) -> None:
-    """Create or replace the standard source table, optionally varying the key and
-    snapshot types or omitting either column."""
+    """Create or replace the standard source table, optionally varying the key and snapshot types or
+    omitting either column."""
     definitions: list[str] = []
     if include_key:
         definitions.append(f"id {key_type}")
@@ -210,8 +210,8 @@ def late_insert_sql(
     payload: str = "late",
     version: int = 1,
 ) -> str:
-    """Build the insert LateWriter runs mid-rebuild, stamped with now64(9) so it
-    lands after the captured snapshot bound."""
+    """Build the insert LateWriter runs mid-rebuild, stamped with now64(9) so it lands after the
+    captured snapshot bound."""
     return (
         f"insert into {database}.{table} "
         "(id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version) "
@@ -262,9 +262,9 @@ def is_capture_noise(query: str) -> bool:
 def fetch_executed_queries(clickhouse_client: Client, since: int) -> list[str]:
     """Statements that finished after the marker, from system.query_log.
 
-    SYSTEM FLUSH LOGS forces the query log buffer to disk; without it the rows are
-    flushed on flush_interval_milliseconds, which defaults to 7500 ms. QueryStart
-    rows are excluded so each executed statement appears once.
+    SYSTEM FLUSH LOGS forces the query log buffer to disk; without it the rows are flushed on
+    flush_interval_milliseconds, which defaults to 7500 ms. QueryStart rows are excluded so each
+    executed statement appears once.
     """
     clickhouse_client.command("system flush logs")
     rows = fetch_rows(
@@ -322,10 +322,9 @@ class ModelRun:
 class LateWriter:
     """Insert a row while a full-refresh bucket query is running.
 
-    Waits for a query matching ``trigger_pattern`` to appear in system.processes, then
-    runs ``insert_sql`` (which should stamp the row with a snapshot above the captured
-    bound, e.g. with now64(9)). Any failure is re-raised from __exit__ so the test
-    cannot pass silently.
+    Waits for a query matching ``trigger_pattern`` to appear in system.processes, then runs
+    ``insert_sql`` (which should stamp the row with a snapshot above the captured bound, e.g. with
+    now64(9)). Any failure is re-raised from __exit__ so the test cannot pass silently.
     """
 
     def __init__(
@@ -410,8 +409,7 @@ class BucketedIncrementalTest(IntegrationTest):
     def run_model(
         self, dbt: Dbt, model: str, clickhouse_client: Client, *, full_refresh: bool = False
     ) -> ModelRun:
-        """Run one model and capture its log tail and the statements executed during
-        the run."""
+        """Run one model and capture its log tail and the statements executed during the run."""
         log_offset = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
         since = server_marker(clickhouse_client)
 

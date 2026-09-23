@@ -60,14 +60,12 @@ CONFIG_ERROR_CASES = [
 class TestConfigurationValidation(BucketedIncrementalTest):
     """Config validation.
 
-    Every rule reads config values only and runs before pre-hooks and any database
-    work.
+    Every rule reads config values only and runs before pre-hooks and any database work.
     """
 
     @pytest.mark.parametrize("model,expected", CONFIG_ERROR_CASES)
     def test_config_error(self, dbt: Dbt, clickhouse_client: Client, model: str, expected: str):
-        """Each invalid config value raises a compiler error before any bucket
-        statement runs."""
+        """Each invalid config value raises a compiler error before any bucket statement runs."""
         run = self.run_model(dbt, model, clickhouse_client)
 
         assert run.success is False
@@ -76,8 +74,7 @@ class TestConfigurationValidation(BucketedIncrementalTest):
         assert run.log_lines(r"Processing bucket") == []
 
     def test_validation_runs_before_hooks(self, dbt: Dbt, clickhouse_client: Client):
-        """Invalid config fails before the pre-hook can create its sentinel
-        table."""
+        """Invalid config fails before the pre-hook can create its sentinel table."""
         run = self.run_model(dbt, "bi_bad_hook", clickhouse_client)
 
         assert run.success is False
@@ -88,13 +85,13 @@ class TestConfigurationValidation(BucketedIncrementalTest):
 class TestMarkerValidation(BucketedIncrementalTest):
     """The marker contract.
 
-    The full-refresh SQL must contain -- __BUCKET_PREDICATE__ exactly once; the
-    materialization replaces it with each bucket's predicate.
+    The full-refresh SQL must contain -- __BUCKET_PREDICATE__ exactly once; the materialization
+    replaces it with each bucket's predicate.
     """
 
     def test_marker_missing(self, dbt: Dbt, clickhouse_client: Client):
-        """A missing marker stops the run with `found 0`, and the temporary
-        relation is never created."""
+        """A missing marker stops the run with `found 0`, and the temporary relation is never
+        created."""
         run = self.run_model(dbt, "bi_no_marker", clickhouse_client)
 
         assert run.success is False
@@ -105,8 +102,8 @@ class TestMarkerValidation(BucketedIncrementalTest):
         assert run.queries_matching(r"__dbt_tmp") == []
 
     def test_marker_duplicated(self, dbt: Dbt, clickhouse_client: Client):
-        """A duplicated marker stops the run with `found 2`, and the temporary
-        relation is never created."""
+        """A duplicated marker stops the run with `found 2`, and the temporary relation is never
+        created."""
         run = self.run_model(dbt, "bi_two_markers", clickhouse_client)
 
         assert run.success is False
@@ -120,13 +117,12 @@ class TestMarkerValidation(BucketedIncrementalTest):
 class TestSourceContract(BucketedIncrementalTest):
     """Source probe.
 
-    bucket_source_table must resolve to a table, and key and snapshot columns are
-    read with data_type, so Nullable/LowCardinality wrappers are rejected.
+    bucket_source_table must resolve to a table, and key and snapshot columns are read with
+    data_type, so Nullable/LowCardinality wrappers are rejected.
     """
 
     def test_source_missing(self, dbt: Dbt, clickhouse_client: Client):
-        """A bucket_source_table that does not exist stops the run, naming the model
-        and table."""
+        """A bucket_source_table that does not exist stops the run, naming the model and table."""
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is False
@@ -136,8 +132,7 @@ class TestSourceContract(BucketedIncrementalTest):
         )
 
     def test_source_is_not_a_table(self, dbt: Dbt, clickhouse_client: Client):
-        """A view where a table is required stops the run, naming the relation
-        type."""
+        """A view where a table is required stops the run, naming the relation type."""
         clickhouse_client.command("create view default.bi_source as select 1 as id")
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -165,9 +160,9 @@ class TestSourceContract(BucketedIncrementalTest):
         ["String", "Nullable(UUID)", "LowCardinality(UUID)", "LowCardinality(Nullable(UUID))"],
     )
     def test_key_column_unsupported_type(self, dbt: Dbt, clickhouse_client: Client, key_type: str):
-        """String and wrapped keys (Nullable, LowCardinality and
-        LowCardinality(Nullable)) are rejected; the probe reads the adapter's
-        nullability flags and reports the wrapper via data_type."""
+        """String and wrapped keys (Nullable, LowCardinality and LowCardinality(Nullable)) are
+        rejected; the probe reads the adapter's nullability flags and reports the wrapper via
+        data_type."""
         create_source(clickhouse_client, key_type=key_type)
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -195,8 +190,8 @@ class TestSourceContract(BucketedIncrementalTest):
     def test_snapshot_column_unsupported_type(
         self, dbt: Dbt, clickhouse_client: Client, snapshot_type: str
     ):
-        """DateTime, DateTime64(3) and Nullable(DateTime64(9)) snapshots are
-        rejected; pinning needs a non-null DateTime64(9)."""
+        """DateTime, DateTime64(3) and Nullable(DateTime64(9)) snapshots are rejected; pinning needs
+        a non-null DateTime64(9)."""
         create_source(clickhouse_client, snapshot_type=snapshot_type)
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -205,8 +200,8 @@ class TestSourceContract(BucketedIncrementalTest):
         assert "must be a non-null DateTime64(9) column" in run.failure_text()
 
     def test_negative_integer_keys(self, dbt: Dbt, clickhouse_client: Client):
-        """The count query counts negative integer keys, and the run stops because
-        modulo would silently drop them."""
+        """The count query counts negative integer keys, and the run stops because modulo would
+        silently drop them."""
         create_source(clickhouse_client, key_type="Int64")
         insert_rows(clickhouse_client, [(-1, "negative", snapshot_at(0), 0, 1)])
 

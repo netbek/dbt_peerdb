@@ -17,16 +17,15 @@ CONCURRENT_ROWS = [(i, f"value-{i}", snapshot_at(i), 0, 1) for i in range(6)]
 class TestConcurrentWrites(BucketedIncrementalTest):
     """on_concurrent_writes modes.
 
-    Every bucket is pinned to S0, so a write landing mid-build is excluded; after
-    the loop the materialization compares the source maximum with S0 and fails
-    closed by default.
+    Every bucket is pinned to S0, so a write landing mid-build is excluded; after the loop the
+    materialization compares the source maximum with S0 and fails closed by default.
     """
 
     def test_error_mode_fails_and_leaves_target_untouched(
         self, dbt: Dbt, clickhouse_client: Client, clickhouse_settings: ClickHouseSettings
     ):
-        """A write stamped after S0 stops the run before the publish step, leaving
-        the previous table in place."""
+        """A write stamped after S0 stops the run before the publish step, leaving the previous
+        table in place."""
         self.create_standard_source(clickhouse_client, CONCURRENT_ROWS)
         assert self.run_model(dbt, "bi_concurrent", clickhouse_client).success is True
         before = fetch_rows(
@@ -50,8 +49,8 @@ class TestConcurrentWrites(BucketedIncrementalTest):
     def test_warn_mode_publishes_and_incremental_converges(
         self, dbt: Dbt, clickhouse_client: Client, clickhouse_settings: ClickHouseSettings
     ):
-        """warn publishes the S0-pinned build without the late row; the next
-        incremental run re-selects the key through the >= watermark."""
+        """Warn publishes the S0-pinned build without the late row; the next incremental run re-
+        selects the key through the >= watermark."""
         self.create_standard_source(clickhouse_client, CONCURRENT_ROWS)
         assert self.run_model(dbt, "bi_concurrent_warn", clickhouse_client).success is True
 
@@ -84,8 +83,7 @@ class TestConcurrentWrites(BucketedIncrementalTest):
         )
 
     def test_ignore_mode_runs_no_detection_query(self, dbt: Dbt, clickhouse_client: Client):
-        """ignore skips the max(snapshot) > S0 check entirely and accepts silent
-        divergence."""
+        """Ignore skips the max(snapshot) > S0 check entirely and accepts silent divergence."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_ignore", clickhouse_client)

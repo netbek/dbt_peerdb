@@ -16,13 +16,12 @@ from dw_lib.dbt import Dbt
 class TestPublication(BucketedIncrementalTest):
     """Publish step.
 
-    A build loads into `<identifier>__dbt_tmp` and publishes in one step: rename
-    on the first run, EXCHANGE TABLES when can_exchange, or two renames otherwise.
+    A build loads into `<identifier>__dbt_tmp` and publishes in one step: rename on the first run,
+    EXCHANGE TABLES when can_exchange, or two renames otherwise.
     """
 
     def test_first_run_renames_intermediate_into_place(self, dbt: Dbt, clickhouse_client: Client):
-        """With no existing relation the intermediate is renamed to the target, with
-        no exchange."""
+        """With no existing relation the intermediate is renamed to the target, with no exchange."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -36,9 +35,8 @@ class TestPublication(BucketedIncrementalTest):
         assert run.queries_matching(r"EXCHANGE TABLES") == []
 
     def test_rebuild_exchanges_and_drops_backup(self, dbt: Dbt, clickhouse_client: Client):
-        """With an existing table the intermediate is renamed to the backup and
-        EXCHANGE TABLES swaps it atomically; the backup is dropped after the
-        commit."""
+        """With an existing table the intermediate is renamed to the backup and EXCHANGE TABLES
+        swaps it atomically; the backup is dropped after the commit."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
@@ -57,8 +55,8 @@ class TestPublication(BucketedIncrementalTest):
         )
 
     def test_view_target_uses_two_renames(self, dbt: Dbt, clickhouse_client: Client):
-        """A view target does not report can_exchange, so the target is renamed to
-        the backup and the intermediate to the target."""
+        """A view target does not report can_exchange, so the target is renamed to the backup and
+        the intermediate to the target."""
         clickhouse_client.command(
             "create view default.bi_basic as "
             "select toUInt64(0) as id, '' as payload, now64(9) as _peerdb_synced_at, "
@@ -79,8 +77,7 @@ class TestPublication(BucketedIncrementalTest):
         )
 
     def test_preexisting_tmp_and_backup_are_dropped(self, dbt: Dbt, clickhouse_client: Client):
-        """Leftovers from an earlier failed run are dropped before the build
-        starts."""
+        """Leftovers from an earlier failed run are dropped before the build starts."""
         clickhouse_client.command(
             "create table default.bi_basic__dbt_tmp (junk UInt8) engine Memory"
         )
@@ -100,8 +97,8 @@ class TestPublication(BucketedIncrementalTest):
         assert relation_exists(clickhouse_client, "bi_basic__dbt_backup") is False
 
     def test_pre_and_post_hooks_run(self, dbt: Dbt, clickhouse_client: Client):
-        """Both hooks execute around the build: the pre-hook before the buckets and
-        the post-hook after the publish, inside the transaction."""
+        """Both hooks execute around the build: the pre-hook before the buckets and the post-hook
+        after the publish, inside the transaction."""
         clickhouse_client.command(
             "create table default.bi_hook_log (event String) engine MergeTree order by event"
         )

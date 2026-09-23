@@ -46,8 +46,8 @@ class TestFullRefresh(BucketedIncrementalTest):
     """
 
     def test_deduplicates_latest_version_per_key(self, dbt: Dbt, clickhouse_client: Client):
-        """A key with two versions collapses to the newest, because each bucket
-        dedupes before inserting."""
+        """A key with two versions collapses to the newest, because each bucket dedupes before
+        inserting."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -59,9 +59,8 @@ class TestFullRefresh(BucketedIncrementalTest):
         )
 
     def test_bucket_sizing_and_snapshot_bounds(self, dbt: Dbt, clickhouse_client: Client):
-        """11 rows at rows_per_bucket=3 yield ceil(11/3)=4 passes; each pass carries
-        its modulo slice plus the `<= S0` bound, S0 being the source's snapshot
-        maximum."""
+        """11 rows at rows_per_bucket=3 yield ceil(11/3)=4 passes; each pass carries its modulo
+        slice plus the `<= S0` bound, S0 being the source's snapshot maximum."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -86,8 +85,8 @@ class TestFullRefresh(BucketedIncrementalTest):
     def test_defaults_use_single_bucket_and_detection_query(
         self, dbt: Dbt, clickhouse_client: Client
     ):
-        """With defaults one bucket covers the source, and the post-build detection
-        query compares the source maximum with S0."""
+        """With defaults one bucket covers the source, and the post-build detection query compares
+        the source maximum with S0."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_defaults", clickhouse_client)
@@ -110,8 +109,8 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert run.queries_matching(r"where 1 = 0")
 
     def test_empty_source_rebuild_publishes_empty_table(self, dbt: Dbt, clickhouse_client: Client):
-        """A rebuild of an emptied source still builds through the intermediate
-        relation and publishes it with EXCHANGE TABLES."""
+        """A rebuild of an emptied source still builds through the intermediate relation and
+        publishes it with EXCHANGE TABLES."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
@@ -126,9 +125,8 @@ class TestFullRefresh(BucketedIncrementalTest):
     def test_bucket_failure_leaves_target_untouched_and_cleans_up(
         self, dbt: Dbt, clickhouse_client: Client
     ):
-        """A failing bucket aborts before the publish step, so the target keeps its
-        previous rows; the next run drops the leftover `__dbt_tmp` before
-        rebuilding."""
+        """A failing bucket aborts before the publish step, so the target keeps its previous rows;
+        the next run drops the leftover `__dbt_tmp` before rebuilding."""
         clean_rows = [row for row in base_rows() if row[0] != 3]
         self.create_standard_source(clickhouse_client, clean_rows)
         assert self.run_model(dbt, "bi_failing", clickhouse_client).success is True
@@ -157,8 +155,8 @@ class TestFullRefresh(BucketedIncrementalTest):
 
     @pytest.mark.parametrize("key_type", INTEGER_KEY_TYPES)
     def test_integer_key_types(self, dbt: Dbt, clickhouse_client: Client, key_type: str):
-        """The key type is inferred from the source column; integers bucket by a bare
-        `id % N` and every signed and unsigned width builds."""
+        """The key type is inferred from the source column; integers bucket by a bare `id % N` and
+        every signed and unsigned width builds."""
         create_source(clickhouse_client, key_type=key_type)
         insert_generated_rows(clickhouse_client, key_type=key_type, count=3)
 
@@ -174,8 +172,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert run.queries_matching(r"reinterpretAsUInt64") == []
 
     def test_uuid_key(self, dbt: Dbt, clickhouse_client: Client):
-        """UUID has no modulo, so the inferred uuid key buckets through
-        reinterpretAsUInt64."""
+        """UUID has no modulo, so the inferred uuid key buckets through reinterpretAsUInt64."""
         create_source(clickhouse_client, key_type="UUID")
         keys = [UUID(int=i) for i in range(3)]
         insert_rows(
@@ -192,8 +189,8 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert run.queries_matching(r"reinterpretAsUInt64\(id\) % \d+ = \d+")
 
     def test_snapshot_timezone_is_kept_in_bound(self, dbt: Dbt, clickhouse_client: Client):
-        """The bound literal is built from the column dtype, so a
-        DateTime64(9, 'UTC') snapshot keeps its timezone."""
+        """The bound literal is built from the column dtype, so a DateTime64(9, 'UTC') snapshot
+        keeps its timezone."""
         create_source(clickhouse_client, snapshot_type="DateTime64(9, 'UTC')")
         insert_rows(
             clickhouse_client,
@@ -208,9 +205,9 @@ class TestFullRefresh(BucketedIncrementalTest):
     def test_full_then_incremental_then_full_refresh_paths(
         self, dbt: Dbt, clickhouse_client: Client
     ):
-        """is_incremental() is true only when the target is a table and the run is
-        not a full refresh, so the first and --full-refresh runs bucket while the
-        middle run uses delete+insert."""
+        """is_incremental() is true only when the target is a table and the run is not a full
+        refresh, so the first and --full-refresh runs bucket while the middle run uses
+        delete+insert."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         first = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -229,10 +226,11 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert third.queries_matching(r"EXCHANGE TABLES")
 
     def test_package_qualified_incremental_detection(self, dbt: Dbt, clickhouse_client: Client):
-        """Models must call dbt_peerdb.is_incremental(): the package macro reports
-        true on an incremental run, while the adapter/global plain call never
-        recognises bucketed_incremental. Catches a package rename or a dbt
-        resolution change."""
+        """Models must call dbt_peerdb.is_incremental(): the package macro reports true on an
+        incremental run, while the adapter/global plain call never recognises bucketed_incremental.
+
+        Catches a package rename or a dbt resolution change.
+        """
         self.create_standard_source(clickhouse_client, base_rows())
 
         first = self.run_model(dbt, "bi_incremental_detection", clickhouse_client)
@@ -266,9 +264,9 @@ class TestFullRefresh(BucketedIncrementalTest):
         ) == [(0, 0, 0), (100, 1, 0)]
 
     def test_partition_by_is_applied_to_the_built_table(self, dbt: Dbt, clickhouse_client: Client):
-        """partition_by reaches the adapter's create table as PARTITION BY, so the
-        published target is partitioned; adapter strategy validation does not
-        consult partition_by for delete_insert."""
+        """partition_by reaches the adapter's create table as PARTITION BY, so the published target
+        is partitioned; adapter strategy validation does not consult partition_by for
+        delete_insert."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_partitioned", clickhouse_client)

@@ -12,15 +12,17 @@ class TestClickHouse(IntegrationTest):
         assert result.result_rows == [("26.3.33.24",)]
 
     def test_clickhouse_query_log(self, clickhouse_client: Client):
-        """system.query_log exists, since the harness reads executed statements from
-        it after SYSTEM FLUSH LOGS."""
+        """system.query_log exists, since the harness reads executed statements from it after SYSTEM
+        FLUSH LOGS."""
         result = clickhouse_client.query("select count() from system.query_log")
         assert result.result_rows is not None
 
     def test_clickhouse_column_wrapper_flags(self):
-        """dbt-clickhouse strips Nullable/LowCardinality into flags and re-wraps
-        data_type; the bucketed_incremental probe relies on both. Re-check when
-        dbt-clickhouse is bumped (see integration-test-implementation F1)."""
+        """Dbt-clickhouse strips Nullable/LowCardinality into flags and re-wraps data_type; the
+        bucketed_incremental probe relies on both.
+
+        Re-check when dbt-clickhouse is bumped (see integration-test-implementation F1).
+        """
         wrapped = ClickHouseColumn("id", "LowCardinality(Nullable(UUID))")
         assert wrapped.is_low_cardinality is True
         assert wrapped.is_nullable is True

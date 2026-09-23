@@ -17,14 +17,13 @@ from dw_lib.dbt import Dbt
 class TestIncrementalMaintenance(BucketedIncrementalTest):
     """Incremental path.
 
-    The adapter builds `<identifier>__dbt_new_data_<invocation_id>` from the model
-    SQL, deletes target rows whose unique_key appears there, inserts the temporary
-    rows, and drops the table.
+    The adapter builds `<identifier>__dbt_new_data_<invocation_id>` from the model SQL, deletes
+    target rows whose unique_key appears there, inserts the temporary rows, and drops the table.
     """
 
     def test_delete_insert_replaces_only_touched_keys(self, dbt: Dbt, clickhouse_client: Client):
-        """Only keys in the new batch are deleted and re-inserted; untouched keys
-        keep their existing rows."""
+        """Only keys in the new batch are deleted and re-inserted; untouched keys keep their
+        existing rows."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
@@ -57,8 +56,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         ] == []
 
     def test_predicates_are_passed_to_delete_and_insert(self, dbt: Dbt, clickhouse_client: Client):
-        """Configured predicates narrow the delete (`and id >= 0`); the insert is not
-        filtered, so predicate semantics are the adapter's."""
+        """Configured predicates narrow the delete (`and id >= 0`); the insert is not filtered, so
+        predicate semantics are the adapter's."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_predicates", clickhouse_client).success is True
 
@@ -76,8 +75,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         )
 
     def test_schema_append_new_columns(self, dbt: Dbt, clickhouse_client: Client):
-        """With append_new_columns the column additions are applied before the
-        delete+insert, so the new column receives data."""
+        """With append_new_columns the column additions are applied before the delete+insert, so the
+        new column receives data."""
         clickhouse_client.command(
             "create table default.bi_schema_append "
             "(id UInt64, _peerdb_synced_at DateTime64(9), _peerdb_is_deleted Int8, "
@@ -102,8 +101,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         )
 
     def test_schema_sync_all_columns(self, dbt: Dbt, clickhouse_client: Client):
-        """With sync_all_columns the obsolete column is dropped and the missing one
-        added before the delete+insert."""
+        """With sync_all_columns the obsolete column is dropped and the missing one added before the
+        delete+insert."""
         clickhouse_client.command(
             "create table default.bi_schema_sync "
             "(id UInt64, payload String, obsolete String, _peerdb_synced_at DateTime64(9), "
@@ -130,8 +129,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         )
 
     def test_schema_fail_stops_the_run(self, dbt: Dbt, clickhouse_client: Client):
-        """With on_schema_change='fail' a target/source mismatch stops the run before
-        the delete+insert."""
+        """With on_schema_change='fail' a target/source mismatch stops the run before the
+        delete+insert."""
         clickhouse_client.command(
             "create table default.bi_schema_fail "
             "(id UInt64, payload String, obsolete String, _peerdb_synced_at DateTime64(9), "
@@ -146,9 +145,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         assert "out of sync" in run.failure_text()
 
     def test_tie_safe_watermark_recaptures_bound_tie(self, dbt: Dbt, clickhouse_client: Client):
-        """A version stamped exactly at the previous bound is re-read because the
-        model compares with >=; ties are reachable at now64() millisecond
-        resolution."""
+        """A version stamped exactly at the previous bound is re-read because the model compares
+        with >=; ties are reachable at now64() millisecond resolution."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
@@ -163,8 +161,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         )
 
     def test_strict_watermark_misses_bound_tie(self, dbt: Dbt, clickhouse_client: Client):
-        """A > watermark cannot re-select a version stamped exactly at the bound, so
-        the change stays missed — the documented price of the strict contract."""
+        """A > watermark cannot re-select a version stamped exactly at the bound, so the change
+        stays missed — the documented price of the strict contract."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_strict", clickhouse_client).success is True
 
@@ -179,8 +177,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         )
 
     def test_unique_key_list_form_is_accepted(self, dbt: Dbt, clickhouse_client: Client):
-        """A list unique_key is normalised to one column and must equal
-        bucket_key_column."""
+        """A list unique_key is normalised to one column and must equal bucket_key_column."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_unique_key_list", clickhouse_client)
