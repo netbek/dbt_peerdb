@@ -8,12 +8,19 @@ Each bucket statement sees the source at a different moment: ClickHouse gives a 
 - **Tie-safe watermark contract.** The model must select changed keys with `snapshot >= high_watermark`, where the watermark is the max snapshot in the built target (`W <= S0`). Every mid-build write has stamp `>= S0 >= W`, so the next incremental run re-selects it, including a write stamped exactly `S0`.
 - **Fail-closed detection.** After the bucket loop the macro compares `max(snapshot)` with `S0`. `on_concurrent_writes` defaults to `error`: the build is discarded and the target is left untouched. `warn` and `ignore` are explicit opt-outs.
 
-Residual loss, not closable by the macro:
+Residual loss, not closable by the macro. How often it bites depends on where the stamp comes from (see below):
 
 | Case | Effect |
 |---|---|
-| Row stamped below S0 landing after its bucket (clock skew, backdated data) | Never re-selected while `W >= S_w`; stale until a later write to the key or the next full refresh |
+| Row stamped below S0 landing after its bucket — PeerDB: cluster clock skew, clock step backward, manual writes with explicit timestamps (rare per row) | Never re-selected while `W >= S_w`; stale until a later write to the key or the next full refresh |
+| Row stamped below S0 landing after its bucket — own updated-at column: late-arriving facts, backfills, out-of-order delivery, source-clock corrections (routine) | Same effect; quiesced rebuilds plus a post-rebuild incremental are required, not optional |
 | Physical row delete after its bucket (non-PeerDB sources) | Stale row until the next full refresh; no version exists to re-select it |
+
+## Watermark provenance: destination-stamped vs source-stamped
+
+PeerDB's `_peerdb_synced_at` is stamped by the destination at normalize-insert (`DateTime64(9) DEFAULT now64()` in `vendor/peerdb/flow/connectors/clickhouse/normalize.go`; the normalize `INSERT INTO ... SELECT` never writes the column explicitly). On a single node that clock is monotonic, so a write landing mid-build carries `S_w >= S0` and late-arriving *source* data is not backdated — it gets a fresh stamp on arrival. QRep flows use the same normalize path, so the same holds for them.
+
+An own updated-at column on a non-PeerDB source is stamped upstream, so the macro sees whatever order the source produces. The pinning, `>=` watermark, and detection mechanics are unchanged, but backdates stop being a corner: quiesce the source for rebuilds and always follow with an incremental run.
 
 ## What the macro does (by section)
 
@@ -25,7 +32,7 @@ Residual loss, not closable by the macro:
   - `on_concurrent_writes` must be one of `warn`, `error`, `ignore`.
   - `inserts_only` is rejected, the resolved strategy must be `delete_insert`, and `adapter.validate_incremental_strategy` is called unconditionally.
 - **Full refresh**: the source must exist and be a table. The key column type is inferred from the source: `UUID`, a signed `Int*` or an unsigned `UInt*`; `Nullable`/wrapped types are rejected. The snapshot column must match `DateTime64(9)` with an optional timezone. The count query returns `count()`, the negative-key count for integer keys, and `toString(max(snapshot))` in one statement. Bucket `i` runs `where key % N = i and snapshot <= S0`; the first bucket is the CTAS that creates the intermediate relation, the rest insert into it.
-- **Detection** (skip with `ignore`): `select max(snapshot) > S0`. `error` raises before the publish swap; `warn` logs.
+- **Detection** (skip with `ignore`): `select max(snapshot) > S0` — catches only a raised maximum, not truncates or deletes that lower the source without raising it. `error` raises before the publish swap; `warn` logs.
 - **Publish**: plain rename on the first run, `EXCHANGE TABLES` when the existing table reports `can_exchange`, two renames otherwise. A failed build leaves the target untouched.
 
 ## Why `>=` is required
@@ -36,11 +43,11 @@ A write landing mid-build carries `S_w >= S0` (monotonic destination clock; Peer
 - `S_w == S0` (a clock-resolution tie) is recovered by `>= W` because `W <= S0`; with a strict `>` it can be missed forever. `now64()` defaults to millisecond resolution, so ties are reachable and the contract is deliberate.
 - A backdated stamp `S_w < S0` is not recovered: `W` can sit at or above `S_w`, and no later run re-selects the key unless the key is written again.
 
-Recovery assumes a monotonic watermark column. `_peerdb_synced_at` is stamped by the destination at normalize-insert, which holds on a single node; across shards or replicas, clock skew produces the backdated residual case.
+Recovery assumes a monotonic watermark column. `_peerdb_synced_at` is stamped by the destination at normalize-insert, which holds on a single node; across shards or replicas, clock skew produces the backdated residual case. Own updated-at columns carry no such guarantee: late, backfilled, or re-stated source rows routinely arrive with old stamps, so the backdated case is their normal operating condition rather than a corner.
 
 ## Worked example
 
-Source `src.events`, 3,000,000 rows, `rows_per_bucket = 1000000` → `N = 3`. Buckets run in order with predicates `id % 3 = 0`, `= 1`, `= 2`, each with `_peerdb_synced_at <= S0`.
+Source `src.events`, 3,000,000 rows, e.g. `rows_per_bucket = 1000000` → `N = 3`. Buckets run in order with predicates `id % 3 = 0`, `= 1`, `= 2`, each with `_peerdb_synced_at <= S0`.
 
 | Time | Event |
 |---|---|
@@ -61,7 +68,7 @@ Delete variant: PeerDB CDC never hard-deletes normalized rows; a delete arrives 
 ## Environment notes
 
 - The bucketed-build hazard does not depend on version or topology: `enable_shared_storage_snapshot_in_query` shares a snapshot only *within* one query, and each bucket is a separate query.
-- A single-node deployment keeps `_peerdb_synced_at` on one clock and removes replica lag, so the ordering assumed above holds.
+- A single-node deployment keeps `_peerdb_synced_at` on one clock and removes replica lag, so the ordering assumed above holds. This is a property of destination-stamped PeerDB columns, not of the macro: own updated-at columns bring their own clock discipline.
 - On 25.12+ the setting defaults on, so the incremental path's two source scans (`changed_keys`, `raw_versions`) share one snapshot; before that, a version landing between the scans can stay missed (inherited from upstream, not introduced here).
 
 ## Decision record (2026-09-20)

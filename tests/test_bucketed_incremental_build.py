@@ -7,6 +7,7 @@ from .helpers import (
     insert_generated_rows,
     insert_rows,
     query_scalar,
+    REGIONS,
     relation_exists,
     snapshot_at,
     SNAPSHOT_BASE,
@@ -82,6 +83,53 @@ class TestFullRefresh(BucketedIncrementalTest):
 
         assert indices == {0, 1, 2, 3}
 
+    def test_exact_division_sizing(self, dbt: Dbt, clickhouse_client: Client):
+        """12 rows at rows_per_bucket=3 yield exactly ceil(12/3)=4 passes with no remainder."""
+        self.create_standard_source(clickhouse_client, base_rows())
+        insert_rows(clickhouse_client, [(100, "value-100", "eu-west", snapshot_at(30), 0, 1)])
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert "bucketed_incremental: row_count=12 bucket_count=4 snapshot_max=" in run.log
+        for bucket in range(1, 5):
+            assert run.log_lines(rf"Processing bucket {bucket} of 4")
+
+        indices = set()
+        for query in run.queries_matching(r"id % 4 = \d+ and _peerdb_synced_at <= toDateTime64\("):
+            match = re.search(r"id % 4 = (\d+) and", query)
+            assert match is not None
+            indices.add(int(match.group(1)))
+
+        assert indices == {0, 1, 2, 3}
+
+    def test_single_row_buckets(self, dbt: Dbt, clickhouse_client: Client):
+        """rows_per_bucket=1 is the valid floor: 3 rows yield 3 single-row passes."""
+        create_source(clickhouse_client)
+        insert_generated_rows(clickhouse_client, key_type="UInt64", count=3)
+
+        run = self.run_model(dbt, "bi_one_per_bucket", clickhouse_client)
+
+        assert run.success is True
+        assert "bucketed_incremental: row_count=3 bucket_count=3 snapshot_max=" in run.log
+        for bucket in range(1, 4):
+            assert run.log_lines(rf"Processing bucket {bucket} of 3")
+
+        indices = set()
+        for query in run.queries_matching(r"id % 3 = \d+ and _peerdb_synced_at <= toDateTime64\("):
+            match = re.search(r"id % 3 = (\d+) and", query)
+            assert match is not None
+            indices.add(int(match.group(1)))
+
+        assert indices == {0, 1, 2}
+        assert fetch_rows(
+            clickhouse_client, "select id from default.bi_one_per_bucket order by id"
+        ) == [
+            (0,),
+            (1,),
+            (2,),
+        ]
+
     def test_defaults_use_single_bucket_and_detection_query(
         self, dbt: Dbt, clickhouse_client: Client
     ):
@@ -107,6 +155,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert "bucket_count=0" in run.log
         assert run.log_lines(r"Processing bucket") == []
         assert run.queries_matching(r"where 1 = 0")
+        assert run.queries_matching(r"as writes_detected") == []
 
     def test_empty_source_rebuild_publishes_empty_table(self, dbt: Dbt, clickhouse_client: Client):
         """A rebuild of an emptied source still builds through the intermediate relation and
@@ -121,6 +170,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert run.success is True
         assert query_scalar(clickhouse_client, "select count() from default.bi_basic") == 0
         assert run.queries_matching(r"EXCHANGE TABLES")
+        assert run.queries_matching(r"as writes_detected") == []
 
     def test_bucket_failure_leaves_target_untouched_and_cleans_up(
         self, dbt: Dbt, clickhouse_client: Client
@@ -135,7 +185,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         )
         assert len(before) == 9
 
-        insert_rows(clickhouse_client, [(3, "poison", snapshot_at(30), 0, 1)])
+        insert_rows(clickhouse_client, [(3, "poison", "af-south", snapshot_at(30), 0, 1)])
         run = self.run_model(dbt, "bi_failing", clickhouse_client, full_refresh=True)
 
         assert run.success is False
@@ -177,7 +227,10 @@ class TestFullRefresh(BucketedIncrementalTest):
         keys = [UUID(int=i) for i in range(3)]
         insert_rows(
             clickhouse_client,
-            [(key, f"value-{i}", snapshot_at(i), 0, 1) for i, key in enumerate(keys)],
+            [
+                (key, f"value-{i}", REGIONS[i % 3], snapshot_at(i), 0, 1)
+                for i, key in enumerate(keys)
+            ],
         )
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -194,7 +247,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         create_source(clickhouse_client, snapshot_type="DateTime64(9, 'UTC')")
         insert_rows(
             clickhouse_client,
-            [(0, "value-0", SNAPSHOT_BASE.replace(tzinfo=UTC), 0, 1)],
+            [(0, "value-0", "af-south", SNAPSHOT_BASE.replace(tzinfo=UTC), 0, 1)],
         )
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
@@ -251,7 +304,7 @@ class TestFullRefresh(BucketedIncrementalTest):
             == 0
         )
 
-        insert_rows(clickhouse_client, [(100, "value-100", snapshot_at(30), 0, 1)])
+        insert_rows(clickhouse_client, [(100, "value-100", "eu-west", snapshot_at(30), 0, 1)])
 
         second = self.run_model(dbt, "bi_incremental_detection", clickhouse_client)
 
@@ -265,13 +318,16 @@ class TestFullRefresh(BucketedIncrementalTest):
 
     def test_partition_by_is_applied_to_the_built_table(self, dbt: Dbt, clickhouse_client: Client):
         """partition_by reaches the adapter's create table as PARTITION BY, so the published target
-        is partitioned; adapter strategy validation does not consult partition_by for
-        delete_insert."""
+        is partitioned by the low-cardinality region column; adapter strategy validation does not
+        consult partition_by for delete_insert."""
         self.create_standard_source(clickhouse_client, base_rows())
 
         run = self.run_model(dbt, "bi_partitioned", clickhouse_client)
 
         assert run.success is True
         assert table_engine(clickhouse_client, "bi_partitioned") == "MergeTree"
-        assert table_partition_key(clickhouse_client, "bi_partitioned") in ("id", "(id)")
+        assert table_partition_key(clickhouse_client, "bi_partitioned") in (
+            "region",
+            "(region)",
+        )
         assert query_scalar(clickhouse_client, "select count() from default.bi_partitioned") == 10

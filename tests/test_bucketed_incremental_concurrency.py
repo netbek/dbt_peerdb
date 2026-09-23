@@ -5,13 +5,14 @@ from .helpers import (
     late_insert_sql,
     LateWriter,
     query_scalar,
+    region_for,
     snapshot_at,
 )
 from clickhouse_connect.driver.client import Client
 from dw_lib.database import ClickHouseSettings
 from dw_lib.dbt import Dbt
 
-CONCURRENT_ROWS = [(i, f"value-{i}", snapshot_at(i), 0, 1) for i in range(6)]
+CONCURRENT_ROWS = [(i, f"value-{i}", region_for(i), snapshot_at(i), 0, 1) for i in range(6)]
 
 
 class TestConcurrentWrites(BucketedIncrementalTest):
@@ -39,6 +40,7 @@ class TestConcurrentWrites(BucketedIncrementalTest):
         failure = run.failure_text()
         assert "concurrent writes to bucket_source_table" in failure
         assert "previous table was left untouched" in failure
+        assert len(run.queries_matching(r"as writes_detected")) == 1
         assert (
             fetch_rows(
                 clickhouse_client, "select id, payload from default.bi_concurrent order by id"
@@ -59,6 +61,7 @@ class TestConcurrentWrites(BucketedIncrementalTest):
 
         assert run.success is True
         assert run.log_lines(r"WARNING: concurrent writes to bucket_source_table")
+        assert len(run.queries_matching(r"as writes_detected")) == 1
         assert (
             query_scalar(
                 clickhouse_client, "select count() from default.bi_concurrent_warn where id = 99"

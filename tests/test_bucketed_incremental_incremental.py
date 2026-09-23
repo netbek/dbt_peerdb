@@ -30,8 +30,8 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         insert_rows(
             clickhouse_client,
             [
-                (0, "value-0-v2", snapshot_at(30), 0, 2),
-                (100, "value-100", snapshot_at(30), 0, 1),
+                (0, "value-0-v2", "af-south", snapshot_at(30), 0, 2),
+                (100, "value-100", "eu-west", snapshot_at(30), 0, 1),
             ],
         )
 
@@ -49,6 +49,9 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         assert run.queries_matching(r"delete from")
         assert run.queries_matching(r"insert into")
         assert run.log_lines(r"Processing bucket") == []
+        new_data_queries = run.queries_matching(r"__dbt_new_data_")
+        assert new_data_queries
+        assert all("__BUCKET_PREDICATE__" not in query for query in new_data_queries)
         assert [
             name
             for name in relation_names(clickhouse_client)
@@ -61,7 +64,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_predicates", clickhouse_client).success is True
 
-        insert_rows(clickhouse_client, [(0, "value-0-v2", snapshot_at(30), 0, 2)])
+        insert_rows(clickhouse_client, [(0, "value-0-v2", "af-south", snapshot_at(30), 0, 2)])
 
         run = self.run_model(dbt, "bi_predicates", clickhouse_client)
 
@@ -70,6 +73,25 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         assert (
             query_scalar(
                 clickhouse_client, "select payload from default.bi_predicates where id = 0"
+            )
+            == "value-0-v2"
+        )
+
+    def test_incremental_predicates_alias_reaches_delete(self, dbt: Dbt, clickhouse_client: Client):
+        """The `incremental_predicates` alias reaches the delete exactly like `predicates`."""
+        self.create_standard_source(clickhouse_client, base_rows())
+        assert self.run_model(dbt, "bi_incremental_predicates", clickhouse_client).success is True
+
+        insert_rows(clickhouse_client, [(0, "value-0-v2", "af-south", snapshot_at(30), 0, 2)])
+
+        run = self.run_model(dbt, "bi_incremental_predicates", clickhouse_client)
+
+        assert run.success is True
+        assert run.queries_matching(r"delete from .* and id >= 0")
+        assert (
+            query_scalar(
+                clickhouse_client,
+                "select payload from default.bi_incremental_predicates where id = 0",
             )
             == "value-0-v2"
         )
@@ -87,17 +109,24 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
             "(7, toDateTime64('2023-01-01 00:00:00.000000000', 9), toInt8(0), toInt64(1))"
         )
         create_source(clickhouse_client)
-        insert_rows(clickhouse_client, [(7, "value-7", snapshot_at(30), 0, 2)])
+        insert_rows(clickhouse_client, [(7, "value-7", "eu-west", snapshot_at(30), 0, 2)])
 
         run = self.run_model(dbt, "bi_schema_append", clickhouse_client)
 
         assert run.success is True
         assert "payload" in column_names(clickhouse_client, "bi_schema_append")
+        assert "region" in column_names(clickhouse_client, "bi_schema_append")
         assert (
             query_scalar(
                 clickhouse_client, "select payload from default.bi_schema_append where id = 7"
             )
             == "value-7"
+        )
+        assert (
+            query_scalar(
+                clickhouse_client, "select region from default.bi_schema_append where id = 7"
+            )
+            == "eu-west"
         )
 
     def test_schema_sync_all_columns(self, dbt: Dbt, clickhouse_client: Client):
@@ -113,7 +142,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
             "(7, 'old', 'junk', toDateTime64('2023-01-01 00:00:00.000000000', 9), 0, 1)"
         )
         create_source(clickhouse_client)
-        insert_rows(clickhouse_client, [(7, "value-7", snapshot_at(30), 0, 2)])
+        insert_rows(clickhouse_client, [(7, "value-7", "eu-west", snapshot_at(30), 0, 2)])
 
         run = self.run_model(dbt, "bi_schema_sync", clickhouse_client)
 
@@ -121,6 +150,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         columns = column_names(clickhouse_client, "bi_schema_sync")
         assert "obsolete" not in columns
         assert "payload" in columns
+        assert "region" in columns
         assert (
             query_scalar(
                 clickhouse_client, "select payload from default.bi_schema_sync where id = 7"
@@ -137,7 +167,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
             "_peerdb_is_deleted Int8, _peerdb_version Int64) engine MergeTree order by id"
         )
         create_source(clickhouse_client)
-        insert_rows(clickhouse_client, [(7, "value-7", snapshot_at(30), 0, 2)])
+        insert_rows(clickhouse_client, [(7, "value-7", "eu-west", snapshot_at(30), 0, 2)])
 
         run = self.run_model(dbt, "bi_schema_fail", clickhouse_client)
 
@@ -146,11 +176,12 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
 
     def test_tie_safe_watermark_recaptures_bound_tie(self, dbt: Dbt, clickhouse_client: Client):
         """A version stamped exactly at the previous bound is re-read because the model compares
-        with >=; ties are reachable at now64() millisecond resolution."""
+        with >=; ties are reachable at now64() millisecond resolution, the realistic PeerDB-native
+        hazard (destination-stamped, single-node monotonic)."""
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
-        insert_rows(clickhouse_client, [(1, "value-1-v3", snapshot_at(20), 0, 3)])
+        insert_rows(clickhouse_client, [(1, "value-1-v3", "eu-west", snapshot_at(20), 0, 3)])
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
@@ -166,7 +197,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_strict", clickhouse_client).success is True
 
-        insert_rows(clickhouse_client, [(1, "value-1-v3", snapshot_at(20), 0, 3)])
+        insert_rows(clickhouse_client, [(1, "value-1-v3", "eu-west", snapshot_at(20), 0, 3)])
 
         run = self.run_model(dbt, "bi_strict", clickhouse_client)
 
@@ -174,6 +205,47 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         assert (
             fetch_rows(clickhouse_client, "select id, payload from default.bi_strict order by id")
             == expected_base_rows()
+        )
+
+    def test_backdated_write_stays_missed_documents_residual(
+        self, dbt: Dbt, clickhouse_client: Client
+    ):
+        """Documents the backdate residual: a version stamped below the target maximum is not re-
+        selected while W >= S_w (design Non-goals and Residual risk row 1). The target keeps the
+        built value until the key is written again or the next full refresh — not a bug.
+
+        Normal PeerDB CDC on a single node cannot produce this shape: stamps are now64() at
+        normalize time, so backdates need shard skew, a clock step backward, manual writes with
+        explicit timestamps, or a source-stamped own updated-at column (late/backfilled source
+        data, where this is routine rather than a corner). The explicit old-timestamp insert
+        below models those vectors.
+
+        Uses id 2, which has no row at the watermark: id 1 would be re-selected on every run
+        because its v2 row sits exactly at W (the documented price of the >= contract).
+        """
+        self.create_standard_source(clickhouse_client, base_rows())
+        assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
+
+        insert_rows(
+            clickhouse_client, [(2, "value-2-v2-backdated", "us-east", snapshot_at(5), 0, 2)]
+        )
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert (
+            query_scalar(clickhouse_client, "select payload from default.bi_basic where id = 2")
+            == "value-2"
+        )
+
+        insert_rows(clickhouse_client, [(2, "value-2-v3", "us-east", snapshot_at(30), 0, 3)])
+
+        converge = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert converge.success is True
+        assert (
+            query_scalar(clickhouse_client, "select payload from default.bi_basic where id = 2")
+            == "value-2-v3"
         )
 
     def test_unique_key_list_form_is_accepted(self, dbt: Dbt, clickhouse_client: Client):

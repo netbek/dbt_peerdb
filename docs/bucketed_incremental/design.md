@@ -18,7 +18,7 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 
 - Resumable builds. A failed build restarts at bucket 0.
 - Physical row deletes during a rebuild. A missed delete leaves a stale row; quiesce the source.
-- Backdated writes. A row stamped below `S0` and landing after its bucket is not re-selected.
+- Backdated writes. A row stamped below `S0` and landing after its bucket is not re-selected. Rare under PeerDB (shard skew, step-back, manual writes); routine for source-stamped own updated-at columns, which must quiesce for rebuilds.
 - Distributed tables and the `insert_overwrite`, `microbatch`, `append` and `legacy` strategies.
 - Enforcing the model's watermark predicate. The materialization cannot inspect it.
 
@@ -27,12 +27,13 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 | Term | Meaning |
 |------|---------|
 | Bucket | One pass over the source, filtered to a subset of keys |
-| `bucket_key_column` | The key column that defines the buckets; must equal `unique_key` |
+| `bucket_key_column` | The key column that defines the buckets; must equal `unique_key`. The repetition is intentional: it turns a silent bucketing corruption (versions of one row splitting across buckets) into a compile-time error (see D4) |
 | `bucket_source_table` | The `database.table` relation the macro counts and type-checks |
-| Snapshot column | A non-null `DateTime64(9)` column that orders writes, usually `_peerdb_synced_at` |
-| `S0` | The maximum snapshot value captured before bucket 0 |
-| `W` | The maximum snapshot value in the published target, at most `S0` |
-| High watermark | The model's estimate of `W`, usually `max(_peerdb_synced_at)` over `{{ this }}` |
+| `bucket_snapshot_column` | The snapshot column; names a column, not a threshold. A non-null `DateTime64(9)` column that orders writes, usually `_peerdb_synced_at`. Destination-stamped under PeerDB, source-stamped for own updated-at columns (see the provenance note in `concurrent-writes-data-loss.md`) |
+| Snapshot column | The role `bucket_snapshot_column` plays: the column whose maximum orders the build |
+| `S0` | The snapshot bound (a value): the maximum snapshot value captured before bucket 0 |
+| `W` | A watermark (a value): the maximum snapshot value in the published target, at most `S0` |
+| High watermark | The model's estimate of `W`, usually `max(_peerdb_synced_at)` over `{{ this }}`. Watermarks are thresholds derived from the snapshot column; `S0`, `W`, and the high watermark are three different numbers with `high watermark <= W <= S0` across a build |
 | Marker | The line `-- __BUCKET_PREDICATE__` that each bucket pass replaces |
 | Full-refresh mode | `should_full_refresh()` or no existing relation or an existing view |
 
@@ -104,27 +105,28 @@ A model that dedupes `_peerdb_synced_at` by key reads the source twice on an inc
 
 ### Snapshot pinning
 
-The count query captures `S0 = max(bucket_snapshot_column)`. Every bucket reads only rows with `snapshot_column <= S0`. A write landing mid-build carries a stamp at or above `S0` on a monotonic clock, so no bucket picks up a value written after the bound and no bucket sees a partial version of a row. The build is internally consistent at `S0`; a write stamped above `S0` is left for the next incremental run.
+The count query captures `S0 = max(bucket_snapshot_column)`. Every bucket reads only rows with `snapshot_column <= S0`. A write landing mid-build carries a stamp at or above `S0` on a destination-monotonic clock (PeerDB `_peerdb_synced_at` on a single node), so no bucket picks up a value written after the bound and no bucket sees a partial version of a row. The build is internally consistent at `S0`; a write stamped above `S0` is left for the next incremental run. Source-stamped own updated-at columns must provide their own per-key monotonicity for this to hold.
 
 ### Tie-safe watermark
 
 The next incremental run re-selects a key when `snapshot >= W`, where `W` is the target's maximum snapshot and `W <= S0`:
 
 - A write stamped `S_w > S0` is always recovered.
-- A write stamped `S_w == S0` is recovered only by `>=`; with a strict `>` it can be missed forever. PeerDB's `_peerdb_synced_at` is `DateTime64(9) DEFAULT now64()`; `now64()` defaults to millisecond resolution, so ties are reachable.
-- A write stamped `S_w < S0` (clock skew, backdated data) is not recovered: `W` can sit at or above `S_w`, and no later run re-selects the key until it is written again or the next full refresh.
+- A write stamped `S_w == S0` is recovered only by `>=`; with a strict `>` it can be missed forever. PeerDB's `_peerdb_synced_at` is `DateTime64(9) DEFAULT now64()`; `now64()` defaults to millisecond resolution, so ties are reachable — the common PeerDB-native case.
+- A write stamped `S_w < S0` (clock skew, backdated data) is not recovered: `W` can sit at or above `S_w`, and no later run re-selects the key until it is written again or the next full refresh. Under PeerDB this needs shard skew, a clock step backward, or manual writes; under own updated-at columns it is routine (late arrivals, backfills, source corrections).
 
 The `>=` comparison is a model contract. The macro cannot inspect the model's predicate, so the README and the spec state the rule and the price: the batch at the watermark is re-read on every incremental run.
 
 ### Fail-closed detection
 
-After the bucket loop, `select max(snapshot) > S0` compares the source with the bound again. `on_concurrent_writes` defaults to `error`: the run stops before the publish step and the target keeps its previous contents. `warn` logs and publishes, which converges only after a later incremental run; `ignore` skips the query and accepts silent divergence. The check costs one extra `max()` scan.
+After the bucket loop, `select max(snapshot) > S0` compares the source with the bound again. `on_concurrent_writes` defaults to `error`: the run stops before the publish step and the target keeps its previous contents. `warn` logs and publishes, which converges only after a later incremental run; `ignore` skips the query and accepts silent divergence. The check costs one extra `max()` scan. It compares maxima only: it catches writes that raise `max` above `S0`, not truncates, TTL expiry, or physical deletes that lower the source without raising `max` (see Residual risk).
 
 ### Residual risk
 
 | Case | Effect | Mitigation |
 |------|--------|------------|
-| Row stamped below `S0` landing after its bucket | Not re-selected while `W >= S_w`; stale until a later write to the key or the next full refresh | None in the macro |
+| Row stamped below `S0` landing after its bucket — PeerDB: shard skew, step-back, manual writes | Not re-selected while `W >= S_w`; stale until a later write to the key or the next full refresh | None in the macro |
+| Row stamped below `S0` landing after its bucket — own updated-at column: late, backfilled, or corrected source data | Same effect | Quiesce the source for rebuilds and follow with an incremental run (required, not optional) |
 | Physical row delete after its bucket | Stale row until the next full refresh; no version exists to re-select it | Quiesce the source for rebuilds |
 | Clock skew across shards or replicas | Backdated stamps widen the first case | Single-node deployment or quiesced rebuilds |
 | Write landing between the two incremental source scans on servers before 25.12 | A version can stay missed until the key changes again | Upgrade; the hazard is inherited from upstream |
@@ -138,13 +140,13 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | `bucket_snapshot_column` | Yes | – | Bare identifier; non-null `DateTime64(9)`; different from `bucket_key_column` |
 | `bucket_source_table` | Yes | – | `database.table`, both bare identifiers; an existing table |
 | `unique_key` | Yes | – | The single `bucket_key_column` |
-| `rows_per_bucket` | No | `1000000` | Positive integer; booleans rejected |
+| `rows_per_bucket` | No | `100000` | Positive integer, minimum 1; booleans rejected; see D9 for scan tradeoff |
 | `on_concurrent_writes` | No | `error` | `warn`, `error` or `ignore` |
 | `incremental_strategy` | No | adapter-resolved | Must resolve to `delete_insert` |
 | `inserts_only` | No | `false` | Must be false |
 | `on_schema_change` | No | `ignore` | `ignore`, `fail`, `append_new_columns`, `sync_all_columns` |
 | `predicates`, `incremental_predicates` | No | `[]` | Passed to the delete+insert step |
-| `partition_by` | No | – | Passed to `validate_incremental_strategy`; the adapter's create table also emits it as `PARTITION BY` |
+| `partition_by` | No | – | Passed to `validate_incremental_strategy`; the adapter's create table also emits it as `PARTITION BY`. Keep cardinality bounded (100–1,000 partitions max): partition by a low-cardinality column such as `region`, never by the key |
 | `engine`, `order_by`, `contract`, `grants`, `indexes`, `docs` | No | – | Standard DDL and lifecycle configs; unchanged by this materialization |
 
 The profile needs `use_lw_deletes: true`. Without the opt-in the adapter resolves the default strategy to `legacy`, which the materialization rejects. The adapter must also be able to enable `allow_nondeterministic_mutations` for its session; a user constrained against `SET` needs the setting in its profile. ClickHouse enforces the setting only on Replicated engines, where it rejects the delete's `IN (SELECT ...)` predicate.
@@ -183,7 +185,7 @@ Every message carries the `bucketed_incremental:` prefix.
 
 **Rationale.** The macro cannot infer where the filter belongs in arbitrary SQL. A marker keeps the model in control of its shape and keeps the predicate visible in the model.
 
-**Consequences.** The full-refresh SQL must carry exactly one marker; validation turns a missing or duplicated marker into a clear error. The incremental branch has no marker because the marker lives in the `is_incremental() == false` branch.
+**Consequences.** The full-refresh SQL must carry exactly one marker; validation turns a missing or duplicated marker into a clear error. The incremental branch has no marker because the marker lives in the `is_incremental() == false` branch. Replacement is a verbatim string splice, not SQL-aware: the marker stands where a `WHERE` clause belongs, so models must not put a `WHERE` before it and must append further full-refresh conditions with `AND` after it.
 
 ### D2: Size buckets by counting the source
 
@@ -247,7 +249,7 @@ Every message carries the `bucketed_incremental:` prefix.
 
 **Rationale.** Materializing the source once defeats the purpose of a bounded-memory rebuild; a view or staging table merely moves the cost. Repeated bounded scans let ClickHouse prune and stream each pass.
 
-**Consequences.** A rebuild reads the source about `N` times. Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
+**Consequences.** A rebuild reads the source about `N` times. The modulo predicate is non-sargable against `ORDER BY`, so each pass is effectively a full scan (the snapshot bound prunes only when the source is ordered or partitioned by snapshot). Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
 
 ### D10: Infer the key type from the source column
 

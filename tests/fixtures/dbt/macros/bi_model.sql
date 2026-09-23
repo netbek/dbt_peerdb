@@ -25,7 +25,7 @@ changed_keys as (
 ),
 {% endif %}
 raw_versions as (
-    select id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
+    select id, payload, region, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
     from {{ source('bi', 'bi_source') }}
     {% if dbt_peerdb.is_incremental() %}
     where id in (select id from changed_keys)
@@ -39,7 +39,7 @@ raw_versions as (
     {% endif %}
 ),
 deduped as (
-    select id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
+    select id, payload, region, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
     from raw_versions
     order by _peerdb_version desc, _peerdb_synced_at desc
     limit 1 by id
