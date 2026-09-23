@@ -161,9 +161,9 @@ declared non-null `DateTime64(9)`.
 
 4. Run `make install` to install Node dependencies, Python dependencies, pre-commit hooks, agent skills, dbt packages for tests, ClickHouse config, and pinned vendor sources:
 
-  ```shell
-  make install
-  ```
+    ```shell
+    make install
+    ```
 
 ### Testing
 
