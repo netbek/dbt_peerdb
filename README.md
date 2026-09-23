@@ -167,6 +167,19 @@ declared non-null `DateTime64(9)`.
 
 ### Testing
 
+Integration tests need a local ClickHouse server v26.3.33.24 with `system.query_log` enabled. `make install` writes the config for tests to `~/.clickhouse/configs/dbt_peerdb.yaml`.
+
+```shell
+# Start local ClickHouse
+make clickhouse-start
+
+# Run tests with output shown
+pytest -s
+
+# Stop local ClickHouse
+make clickhouse-stop
+```
+
 ### Release
 
 1. Run `make bump-version [major|minor|patch]`. This bumps `pyproject.toml`, syncs `package.json`, `dbt_project.yml`, and the `packages.yml` pin in this README, then commits.
