@@ -4,6 +4,8 @@
 
 The `bucketed_incremental` materialization builds and maintains large ClickHouse tables that a change-data-capture process writes to continuously. A full refresh loads the source in sequential key buckets into an intermediate relation and publishes the finished table in one step, so readers never see a half-built table and a failed build leaves the previous contents in place. Incremental runs replace only the keys that the source touched, using the adapter's delete+insert path. A required snapshot column pins every bucket to a captured bound, and a post-build check fails a rebuild when writes land mid-build, so concurrent writers cannot slip through unnoticed.
 
+Terms (`bucket_key_column`, snapshot column, `S0`, `W`, high watermark, marker) are defined once in [design Terminology](design.md#terminology); columns name data while watermarks are thresholds derived from the snapshot column.
+
 ## Requirements
 
 ### Requirement: Incremental Detection
@@ -49,12 +51,13 @@ A first run or any full refresh SHALL build the table in sequential key buckets 
 
 ### Requirement: Bucket Predicate Marker
 
-The model SQL for a full refresh SHALL contain the marker `-- __BUCKET_PREDICATE__` exactly once, in the full-history branch. The materialization SHALL replace the marker with the predicate of the current bucket on every bucket pass.
+The model SQL for a full refresh SHALL contain the marker `-- __BUCKET_PREDICATE__` exactly once, in the full-history branch. The marker SHALL stand where a `WHERE` clause belongs: the full-history branch SHALL NOT contain a `WHERE` before the marker, and additional full-refresh conditions SHALL follow the marker joined with `AND`. The materialization SHALL replace the marker with the predicate of the current bucket on every bucket pass.
 
 #### Scenario: Marker replaced
 - **WHEN** a bucket pass runs
 - **THEN** the marker is replaced by a `where` clause of the form `<key expression> % <bucket count> = <bucket index>`
 - **AND** the clause also carries `<snapshot column> <= <snapshot bound>` when pinning applies
+- **AND** the replacement itself begins with `where`, so the full-history branch holds no `WHERE` before the marker
 
 #### Scenario: Marker missing or duplicated
 - **WHEN** the SQL for a full refresh contains no marker or more than one marker
@@ -67,7 +70,7 @@ The model SQL for a full refresh SHALL contain the marker `-- __BUCKET_PREDICATE
 
 ### Requirement: Bucket Sizing
 
-The materialization SHALL size buckets from `rows_per_bucket`, a positive integer that defaults to 1,000,000, and the row count of `bucket_source_table`.
+The materialization SHALL size buckets from `rows_per_bucket`, a positive integer of at least 1 that defaults to 100,000, and the row count of `bucket_source_table`.
 
 #### Scenario: Bucket count
 - **WHEN** the row count of `bucket_source_table` is `R` and `rows_per_bucket` is `B`
@@ -176,6 +179,8 @@ The materialization SHALL read counts and type information from `bucket_source_t
 
 The materialization SHALL pin every full refresh to a snapshot bound captured before the first bucket.
 
+Note: recovery through the bound assumes per-key-monotonic stamps. PeerDB `_peerdb_synced_at` provides this on a single node (destination-stamped at normalize time); own updated-at columns meet this contract only under quiesced rebuilds, since late, backfilled, or corrected source rows routinely carry older stamps.
+
 #### Scenario: Snapshot type
 - **WHEN** the source `bucket_snapshot_column` is not a non-null `DateTime64(9)` column with an optional timezone
 - **THEN** the run stops with a compiler error that names the column and its type
@@ -190,7 +195,7 @@ The materialization SHALL pin every full refresh to a snapshot bound captured be
 
 ### Requirement: Concurrent-Write Detection
 
-After the bucket loop and before the publish step, the materialization SHALL compare the source maximum snapshot with the captured bound, unless `on_concurrent_writes` is `ignore` or the captured maximum is empty.
+After the bucket loop and before the publish step, the materialization SHALL compare the source maximum snapshot with the captured bound, unless `on_concurrent_writes` is `ignore` or the captured maximum is empty (`row_count == 0`; an epoch `max` on an empty source counts as empty, cf. F6 in `integration-test-implementation.md`). Detection fires only when the source maximum exceeds `S0`; source changes that do not raise the maximum (truncate, TTL or retention deletes) are not detected.
 
 #### Scenario: Error response
 - **WHEN** the source maximum exceeds `S0` and `on_concurrent_writes` is `error`, the default
@@ -264,6 +269,7 @@ Models SHALL satisfy the parts of the design that the materialization cannot ins
 #### Scenario: Tie-safe watermark
 - **WHEN** the incremental branch selects changed keys with `<snapshot column> >= <high watermark>`, where the watermark is the target's maximum snapshot
 - **THEN** a write stamped exactly at the previous bound is re-selected on the next incremental run
+- **NOTE** a write stamped below the watermark is not re-selected by any predicate the macro can enforce; under PeerDB this needs skew, step-back, or manual writes, while under own updated-at columns it is routine late/backfilled data (see provenance note above)
 
 #### Scenario: Strict watermark
 - **WHEN** a model uses `>` instead of `>=`

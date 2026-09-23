@@ -17,7 +17,7 @@
   {%- set full_refresh_mode = (should_full_refresh() or existing_relation is none or existing_relation.is_view) -%}
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
   {%- set bucket_key_column = config.get('bucket_key_column', none) -%}
-  {%- set rows_per_bucket = config.get('rows_per_bucket', 1000000) -%}
+  {%- set rows_per_bucket = config.get('rows_per_bucket', 100000) -%}
   {%- set bucket_source_table = config.get('bucket_source_table', none) -%}
   {%- set bucket_snapshot_column = config.get('bucket_snapshot_column', none) -%}
   {%- set on_concurrent_writes = config.get('on_concurrent_writes', 'error') -%}
@@ -66,7 +66,7 @@
   {% endif %}
   {% if rows_per_bucket is boolean or rows_per_bucket is not number or rows_per_bucket | int != rows_per_bucket or rows_per_bucket < 1 %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: rows_per_bucket must be a positive integer.'
+        'bucketed_incremental: rows_per_bucket must be a positive integer (>= 1).'
     ) }}
   {% endif %}
   {% if on_concurrent_writes not in ('warn', 'error', 'ignore') %}
@@ -196,7 +196,10 @@
         excluded from all buckets and picked up by the next incremental run
         instead of slipping through silently. The snapshot column must be a
         non-null DateTime64(9); models must compare it with >= against the
-        previous target maximum so a write stamped exactly S0 is recaptured. -#}
+        previous target maximum so a write stamped exactly S0 is recaptured.
+        This assumes destination-monotonic stamps per key (PeerDB single-node);
+        source-stamped own columns make backdates routine, so quiesce for
+        rebuilds and follow with an incremental run. -#}
     {% set build_relation = intermediate_relation %}
     {% set need_swap = true %}
     {% set count_select = ['count() as row_count'] %}
@@ -241,7 +244,7 @@
     {% else %}
       {% set snapshot_literal = "toDateTime64('" ~ snapshot_str ~ "', 9" ~ (", '" ~ snapshot_tz ~ "'" if snapshot_tz else "") ~ ")" %}
     {% endif %}
-    {% set bucket_count = ((row_count / rows_per_bucket) | round(0, 'ceil')) | int %}
+    {% set bucket_count = ((row_count + rows_per_bucket - 1) // rows_per_bucket) | int %}
     {{ log(
         'bucketed_incremental: row_count='
         ~ row_count
@@ -258,6 +261,9 @@
       {% endcall %}
     {% else %}
       {% for i in range(bucket_count) %}
+        {#- The marker is replaced verbatim with a where clause, so models must
+            not supply their own WHERE before it; further full-refresh filters
+            go after the marker joined with AND. -#}
         {% set predicate = 'where '
             ~ bucket_lhs
             ~ ' % '
@@ -283,7 +289,7 @@
         {% endif %}
       {% endfor %}
     {% endif %}
-    {% if snapshot_str is not none and on_concurrent_writes != 'ignore' %}
+    {% if snapshot_str is not none and row_count > 0 and on_concurrent_writes != 'ignore' %}
       {% set post_count_sql %}select max({{ bucket_snapshot_column }}) > {{ snapshot_literal }} as writes_detected from {{ bucket_source_table }}{% endset %}
       {% set post_count_result = run_query(post_count_sql) %}
       {% set writes_detected = post_count_result.columns[0].values()[0] %}

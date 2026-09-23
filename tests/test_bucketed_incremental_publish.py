@@ -40,7 +40,7 @@ class TestPublication(BucketedIncrementalTest):
         self.create_standard_source(clickhouse_client, base_rows())
         assert self.run_model(dbt, "bi_basic", clickhouse_client).success is True
 
-        insert_rows(clickhouse_client, [(100, "value-100", snapshot_at(30), 0, 1)])
+        insert_rows(clickhouse_client, [(100, "value-100", "eu-west", snapshot_at(30), 0, 1)])
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client, full_refresh=True)
 

@@ -41,9 +41,13 @@ CONFIG_ERROR_CASES = [
     ),
     ("bi_unique_key_missing", 'unique_key must be the single bucket_key_column "id"'),
     ("bi_unique_key_mismatch", 'unique_key must be the single bucket_key_column "id"'),
+    ("bi_unique_key_multi", 'unique_key must be the single bucket_key_column "id"'),
+    ("bi_unique_key_empty", 'unique_key must be the single bucket_key_column "id"'),
     ("bi_rows_bool", "rows_per_bucket must be a positive integer"),
     ("bi_rows_zero", "rows_per_bucket must be a positive integer"),
     ("bi_rows_float", "rows_per_bucket must be a positive integer"),
+    ("bi_rows_negative", "rows_per_bucket must be a positive integer"),
+    ("bi_rows_string", "rows_per_bucket must be a positive integer"),
     ("bi_on_concurrent_invalid", 'on_concurrent_writes must be one of "warn", "error", "ignore"'),
     ("bi_inserts_only", "inserts_only is not supported"),
     (
@@ -203,7 +207,7 @@ class TestSourceContract(BucketedIncrementalTest):
         """The count query counts negative integer keys, and the run stops because modulo would
         silently drop them."""
         create_source(clickhouse_client, key_type="Int64")
-        insert_rows(clickhouse_client, [(-1, "negative", snapshot_at(0), 0, 1)])
+        insert_rows(clickhouse_client, [(-1, "negative", "us-east", snapshot_at(0), 0, 1)])
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 

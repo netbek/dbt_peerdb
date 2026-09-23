@@ -21,7 +21,23 @@ import time
 LOG_PATH = Path(__file__).parent / "fixtures" / "dbt" / "logs" / "dbt.log"
 
 SOURCE_TABLE = "bi_source"
-SOURCE_COLUMNS = ["id", "payload", "_peerdb_synced_at", "_peerdb_is_deleted", "_peerdb_version"]
+SOURCE_COLUMNS = [
+    "id",
+    "payload",
+    "region",
+    "_peerdb_synced_at",
+    "_peerdb_is_deleted",
+    "_peerdb_version",
+]
+
+# Low-cardinality demo column: 3 values cycled per key, so partitioning by it stays bounded.
+REGIONS = ["af-south", "eu-west", "us-east"]
+
+
+def region_for(key: int) -> str:
+    """Deterministic region for a key, stable across versions of the same row."""
+    return REGIONS[key % len(REGIONS)]
+
 
 SNAPSHOT_BASE = datetime(2024, 1, 1, 10, 0, 0, tzinfo=UTC)
 
@@ -33,8 +49,8 @@ def snapshot_at(seconds: int) -> datetime:
 
 def base_rows() -> list[tuple]:
     """Ten source rows, where id 1 carries a second, newer version."""
-    rows = [(i, f"value-{i}", snapshot_at(i), 0, 1) for i in range(10)]
-    rows.append((1, "value-1-v2", snapshot_at(20), 0, 2))
+    rows = [(i, f"value-{i}", region_for(i), snapshot_at(i), 0, 1) for i in range(10)]
+    rows.append((1, "value-1-v2", region_for(1), snapshot_at(20), 0, 2))
     return rows
 
 
@@ -161,6 +177,7 @@ def create_source(
     if include_key:
         definitions.append(f"id {key_type}")
     definitions.append("payload String")
+    definitions.append("region LowCardinality(String)")
     if include_snapshot:
         definitions.append(f"_peerdb_synced_at {snapshot_type}")
     definitions.extend(["_peerdb_is_deleted Int8", "_peerdb_version Int64"])
@@ -198,6 +215,7 @@ def insert_generated_rows(
     clickhouse_client.command(
         f"insert into {clickhouse_client.database}.{table} "
         f"select to{key_type}(number), concat('value-', toString(number)), "
+        f"['af-south', 'eu-west', 'us-east'][toUInt8((number % 3) + 1)], "
         f"toDateTime64('{timestamp}', 9), toInt8(0), toInt64(1) from numbers({count})"
     )
 
@@ -209,13 +227,14 @@ def late_insert_sql(
     key: int = 99,
     payload: str = "late",
     version: int = 1,
+    region: str = "af-south",
 ) -> str:
     """Build the insert LateWriter runs mid-rebuild, stamped with now64(9) so it lands after the
     captured snapshot bound."""
     return (
         f"insert into {database}.{table} "
-        "(id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version) "
-        f"values ({key}, '{payload}', now64(9), 0, {version})"
+        "(id, payload, region, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version) "
+        f"values ({key}, '{payload}', '{region}', now64(9), 0, {version})"
     )
 
 
@@ -430,6 +449,7 @@ class BucketedIncrementalTest(IntegrationTest):
 
 __all__ = [
     "LOG_PATH",
+    "REGIONS",
     "SNAPSHOT_BASE",
     "SOURCE_COLUMNS",
     "SOURCE_TABLE",
@@ -448,6 +468,7 @@ __all__ = [
     "late_insert_sql",
     "make_client",
     "query_scalar",
+    "region_for",
     "relation_exists",
     "relation_names",
     "snapshot_at",

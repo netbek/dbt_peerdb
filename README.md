@@ -36,7 +36,9 @@ target rows the new batch replaces, then insert the new rows.
 Every bucket reads only rows up to a captured snapshot bound, so a write
 stamped after the bound is excluded from every bucket; a post-build check
 then fails the run (`error`, the default), logs (`warn`), or stays quiet
-(`ignore`) when the source moved meanwhile. Models select changed keys
+(`ignore`) when the source moved meanwhile. The check sees only a raised
+snapshot maximum — a truncate or delete that doesn't raise it passes
+silently, so quiesce the source for rebuilds. Models select changed keys
 with `snapshot >= high_watermark`, so the next incremental run recovers
 those writes, including ties at the bound. The key column type is inferred
 from the source (non-null UUID, signed or unsigned integers) and
@@ -49,17 +51,24 @@ What your model must do:
 
 - Set `bucket_key_column` to the key column: a single bare identifier that
   exists in `bucket_source_table`, and the same column as `unique_key`, so
-  every version of one row always lands in the same bucket.
+  every version of one row always lands in the same bucket. The repetition
+  is intentional: a mismatch fails the run instead of silently corrupting
+  the table.
 - Set `bucket_source_table` to the `database.table` the model reads. The
   materialization counts it, probes its column types, and bounds every
   bucket by its snapshot maximum, so keep it in sync with the model.
 - Set `bucket_snapshot_column` to a non-null `DateTime64(9)` column of the
   source (e.g. `_peerdb_synced_at`), different from the key column. The
   materialization captures its maximum before building and reads only rows
-  up to that bound.
-- Set `rows_per_bucket` (default 1000000, a positive whole number) to size
+  up to that bound. This names a column; `S0`, `W`, and the high watermark
+  are values derived from it — see Terminology below.
+- Set `rows_per_bucket` (default 100000, minimum 1, a positive whole number) to size
   the buckets: the bucket count is the source row count divided by this
   number, rounded up. Lower it if a single bucket exhausts memory.
+  Each bucket filters on `key % N = i`, which cannot use the source's sparse
+  primary-key index, so every bucket scans the source — lowering the value
+  lowers peak memory but raises total scan cost (about one source scan per
+  bucket per rebuild).
 - Call `dbt_peerdb.is_incremental()` to detect incremental runs, as in the
   example. dbt resolves a plain `is_incremental()` from the root project or
   the adapter's global macros, which do not recognise `bucketed_incremental`,
@@ -105,6 +114,7 @@ raw_versions as (
     where id in (select id from changed_keys)
     {% else %}
     -- __BUCKET_PREDICATE__
+    -- No WHERE before this marker; append further full-refresh filters with AND after it.
     {% endif %}
 ),
 deduped as (
@@ -121,19 +131,42 @@ What the query does:
 - On the first run or `--full-refresh`, the full-history branch runs once
   per bucket. Each pass fills `-- __BUCKET_PREDICATE__` with its own key
   slice and snapshot bound, then collapses each key to one row — latest
-  version wins. Tombstone versions (`_peerdb_is_deleted = 1`) are kept as
+  version wins. The marker is replaced verbatim with a `where` clause, so
+  put no `WHERE` before it and append further full-refresh filters with
+  `AND` after it. Tombstone versions (`_peerdb_is_deleted = 1`) are kept as
   rows like any other version.
 - On incremental runs, the model reads the high watermark (the target's
   maximum snapshot), re-reads every version of each key stamped at or
   after it, dedupes to one row per key, and the delete+insert step
   replaces those keys in the target. The `>=` comparison recaptures a
   write stamped exactly at the previous bound; keep it if you adapt this
-  example. Tombstones replace their keys the same way, so deletes arrive
-  as rows and downstream models filter them.
+  example. Recovery assumes stamps never go backward per key — true by
+  construction for PeerDB on a single node (see below), an operational
+  obligation for own-column sources. Tombstones replace their keys the
+  same way, so deletes arrive as rows and downstream models filter them.
 
 `_peerdb_synced_at` is the high-watermark column PeerDB maintains on
 replicated tables; for non-PeerDB sources use your own updated-at column,
 declared non-null `DateTime64(9)`.
+
+Which watermark do you have?
+
+- PeerDB `_peerdb_synced_at`: stamped by the destination at normalize time
+  (`DEFAULT now64()`; the normalize query never writes the column
+  explicitly), so it is monotonic on a single node. Mid-build writes and
+  ties at the bound are the hazards that matter, and the macro plus `>=`
+  handles them. Backdated stamps need cluster clock skew, a clock step
+  backward, or manual writes with explicit timestamps — rare per row.
+- Own updated-at column: stamped by the source, so late-arriving facts,
+  backfills, out-of-order delivery, and source-clock corrections routinely
+  carry old stamps that the macro cannot recover (`W >= S_w` stays missed
+  until the key is written again or the next full refresh). Rebuild only
+  against a quiesced source, always follow a rebuild with an incremental
+  run, and keep `on_concurrent_writes="error"` (the default).
+
+Terms used here — snapshot column, `S0`, `W`, high watermark, marker —
+are defined once in [Terminology](docs/bucketed_incremental/design.md#terminology):
+columns name data, watermarks are thresholds derived from the snapshot column.
 
 ## Development
 
