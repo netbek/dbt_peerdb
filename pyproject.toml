@@ -11,7 +11,9 @@ dev = [
     "clickhousectl>=0.4.2",
     "netbek-dw-lib[clickhouse,dbt]>=1.36.8",
     "pre-commit>=4.6.2",
+    "pydantic>=2.13.5",
     "pytest>=9.1.1",
+    "ruamel-yaml>=0.19.1",
     "ruff>=0.16.7",
     "ty>=0.0.80",
 ]
