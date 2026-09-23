@@ -59,8 +59,8 @@ class IntegrationTest:
 
     @pytest.fixture(scope="session")
     def clickhouse_client(self, clickhouse_adapter: ClickHouseAdapter) -> Generator[Client, Any]:
-        with clickhouse_adapter.create_client() as client:
-            yield client
+        with clickhouse_adapter.create_client() as clickhouse_client:
+            yield clickhouse_client
 
     @pytest.fixture(scope="session")
     def dbt_profiles_dir(self) -> Path:
@@ -71,7 +71,7 @@ class IntegrationTest:
         return Path(__file__).parent / "fixtures" / "dbt"
 
     @pytest.fixture(scope="session")
-    def dbt_target_settings(self, dbt_profiles_dir: Path) -> DbtProfile:
+    def dbt_target_settings(self, dbt_profiles_dir: Path) -> DbtTargetSettings:
         yaml = YAML(typ="safe")
         with open(dbt_profiles_dir / "profiles.yml") as fp:
             data = yaml.load(fp)

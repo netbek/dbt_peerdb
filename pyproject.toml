@@ -18,6 +18,11 @@ dev = [
     "ty>=0.0.80",
 ]
 
+[tool.docformatter]
+black = true
+wrap-descriptions = 100
+wrap-summaries = 100
+
 [tool.isort]
 force_alphabetical_sort = true
 line_length = 100

@@ -60,6 +60,10 @@ What your model must do:
 - Set `rows_per_bucket` (default 1000000, a positive whole number) to size
   the buckets: the bucket count is the source row count divided by this
   number, rounded up. Lower it if a single bucket exhausts memory.
+- Call `dbt_peerdb.is_incremental()` to detect incremental runs, as in the
+  example. dbt resolves a plain `is_incremental()` from the root project or
+  the adapter's global macros, which do not recognise `bucketed_incremental`,
+  so the plain call compiles the full-history branch on every run.
 
 Example model:
 
@@ -77,7 +81,7 @@ Example model:
 ) }}
 
 with
-{% if is_incremental() %}
+{% if dbt_peerdb.is_incremental() %}
 watermark as (
     select coalesce(
         max(_peerdb_synced_at),
@@ -96,7 +100,7 @@ changed_keys as (
 raw_versions as (
     select id, payload, _peerdb_synced_at, _peerdb_is_deleted, _peerdb_version
     from {{ source('my_database', 'my_table') }}
-    {% if is_incremental() %}
+    {% if dbt_peerdb.is_incremental() %}
     -- All versions of each touched key, so late versions dedupe correctly.
     where id in (select id from changed_keys)
     {% else %}
@@ -155,10 +159,26 @@ declared non-null `DateTime64(9)`.
     mise trust
     ```
 
-### Vendor reference sources
+4. Run `make install` to install Node dependencies, Python dependencies, pre-commit hooks, agent skills, dbt packages for tests, ClickHouse config, and pinned vendor sources:
 
-Run `make install` to clone pinned reference sources into `vendor/` for upgrade diffing.
-Re-running `make install` discards local changes in these checkouts and resets them to the pinned refs, so never edit them directly.
+  ```shell
+  make install
+  ```
+
+### Testing
+
+Integration tests need a local ClickHouse server v26.3.33.24 with `system.query_log` enabled. `make install` writes the config for tests to `~/.clickhouse/configs/dbt_peerdb.yaml`.
+
+```shell
+# Start local ClickHouse
+make clickhouse-start
+
+# Run tests with output shown
+pytest -s
+
+# Stop local ClickHouse
+make clickhouse-stop
+```
 
 ### Release
 

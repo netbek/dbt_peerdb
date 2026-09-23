@@ -1,0 +1,13 @@
+{{ config(
+    materialized='bucketed_incremental',
+    incremental_strategy='delete_insert',
+    engine='MergeTree()',
+    order_by='id',
+    unique_key='id',
+    bucket_key_column='id',
+    bucket_snapshot_column='_peerdb_synced_at',
+    bucket_source_table='default.bi_source',
+    rows_per_bucket=1000,
+    on_concurrent_writes='warn',
+) }}
+{{ bi_model_sql(sleep_seconds=0.5) }}

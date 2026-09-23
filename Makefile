@@ -135,6 +135,7 @@ format:
 	pre-commit run yamlfmt --all-files
 	pre-commit run pyupgrade --all-files
 	pre-commit run isort --all-files
+	pre-commit run docformatter --all-files
 	pre-commit run ruff-format --all-files
 
 lint:
