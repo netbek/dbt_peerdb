@@ -159,10 +159,13 @@ declared non-null `DateTime64(9)`.
     mise trust
     ```
 
-### Vendor reference sources
+4. Run `make install` to install Node dependencies, Python dependencies, pre-commit hooks, agent skills, dbt packages for tests, ClickHouse config, and pinned vendor sources:
 
-Run `make install` to clone pinned reference sources into `vendor/` for upgrade diffing.
-Re-running `make install` discards local changes in these checkouts and resets them to the pinned refs, so never edit them directly.
+  ```shell
+  make install
+  ```
+
+### Testing
 
 ### Release
 
