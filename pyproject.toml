@@ -9,7 +9,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "clickhousectl>=0.4.2",
-    "netbek-dw-lib[clickhouse,dbt]>=1.36.8",
+    "netbek-dw-lib[clickhouse,dbt]>=1.36.10",
     "pre-commit>=4.6.2",
     "pydantic>=2.13.5",
     "pytest>=9.1.1",
@@ -50,4 +50,5 @@ norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules"
 
 [tool.uv]
 exclude-newer = "7 days"
+exclude-newer-package = { netbek-dw-lib = "0 days" }
 python-preference = "only-managed"

@@ -6,6 +6,9 @@ requires-python = "==3.13.*"
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[options.exclude-newer-package]
+netbek-dw-lib = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
+
 [[package]]
 name = "agate"
 version = "1.9.1"
@@ -369,7 +372,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "clickhousectl", specifier = ">=0.4.2" },
-    { name = "netbek-dw-lib", extras = ["clickhouse", "dbt"], specifier = ">=1.36.8" },
+    { name = "netbek-dw-lib", extras = ["clickhouse", "dbt"], specifier = ">=1.36.10" },
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pytest", specifier = ">=9.1.1" },
@@ -677,7 +680,7 @@ wheels = [
 
 [[package]]
 name = "netbek-dw-lib"
-version = "1.36.8"
+version = "1.36.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
@@ -692,9 +695,9 @@ dependencies = [
     { name = "sqlglot" },
     { name = "sqlparse" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/91/154a73b428f10a42b62a142fb4a99a74d04fdeefc8757342e28ce32bf249/netbek_dw_lib-1.36.8.tar.gz", hash = "sha256:5d1d77e63dbdec1822873161a592dc5f16a18523ba822bc344d6b9dcc967f7f9", size = 39923, upload-time = "2026-09-10T23:36:49.138Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/d4/e95e3d58a7e6cd872e1ab7d13dee38f3ef2182b0aba6e6fb5cef29ffea5d/netbek_dw_lib-1.36.10.tar.gz", hash = "sha256:5e4483ffdd598323369d0ccf7c456f1457b45f7789071d9138d4d44617ab3655", size = 40020, upload-time = "2026-09-23T16:47:24.48Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/e0/a2fd121c01b87073a148c567fbfc3cdeb6506ba20c2c3bdabb94c7d93da1/netbek_dw_lib-1.36.8-py3-none-any.whl", hash = "sha256:a2188894e1be929e5308ce5d8b76c1aa512653b2318fae633bbac467b882c53f", size = 51418, upload-time = "2026-09-10T23:36:46.97Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/a8/7fe5fd843c070ab22b6650141b6d012d8ccbe8bc5ee923829818b367850c/netbek_dw_lib-1.36.10-py3-none-any.whl", hash = "sha256:8fa762e9150af7f657e2b17f85f88642bf37ed7eee6cfca51a6a0af25d3fce9f", size = 51510, upload-time = "2026-09-23T16:47:22.396Z" },
 ]
 
 [package.optional-dependencies]
