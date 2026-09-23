@@ -3,7 +3,7 @@ from collections.abc import Generator
 from dw_lib.database import ClickHouseAdapter, ClickHouseSettings
 from dw_lib.dbt import Dbt
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from ruamel.yaml import YAML
 from typing import Any, Literal
 
@@ -11,29 +11,45 @@ import pytest
 
 
 class DbtTargetSettings(BaseModel):
-    driver: Literal["http", "native"]
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["clickhouse"]
+    threads: int
     host: str
     port: int
-    username: str = Field(alias="user")
+    user: str
     password: str
-    database: str = Field(alias="schema")
+    schema_: str = Field(alias="schema")
+    driver: Literal["http", "native"]
+    secure: bool = False
+    use_lw_deletes: bool = True
+
+
+class DbtProfile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    target: str
+    outputs: dict[str, DbtTargetSettings]
+
+
+class DbtProfiles(RootModel[dict[str, DbtProfile]]):
+    pass
 
 
 def to_clickhouse_settings(dbt_target_settings: DbtTargetSettings) -> ClickHouseSettings:
     return ClickHouseSettings(
         host=dbt_target_settings.host,
         port=dbt_target_settings.port,
-        username=dbt_target_settings.username,
+        username=dbt_target_settings.user,
         password=dbt_target_settings.password,
-        database=dbt_target_settings.database,
+        database=dbt_target_settings.schema_,
     )
 
 
 class IntegrationTest:
     @pytest.fixture(scope="session")
-    def clickhouse_settings(self, dbt_profiles: dict) -> Generator[ClickHouseSettings, Any]:
-        dbt_target_settings = DbtTargetSettings(**dbt_profiles["example"]["outputs"]["dev"])
-        yield to_clickhouse_settings(dbt_target_settings)
+    def clickhouse_settings(self, dbt_target_settings: DbtTargetSettings) -> ClickHouseSettings:
+        return to_clickhouse_settings(dbt_target_settings)
 
     @pytest.fixture(scope="session")
     def clickhouse_adapter(
@@ -55,12 +71,13 @@ class IntegrationTest:
         return Path(__file__).parent / "fixtures" / "dbt"
 
     @pytest.fixture(scope="session")
-    def dbt_profiles(self, dbt_profiles_dir: Path) -> dict:
+    def dbt_target_settings(self, dbt_profiles_dir: Path) -> DbtProfile:
         yaml = YAML(typ="safe")
         with open(dbt_profiles_dir / "profiles.yml") as fp:
             data = yaml.load(fp)
-        return data
+        dbt_profiles = DbtProfiles.model_validate(data)
+        return dbt_profiles.root["example"].outputs["dev"]
 
     @pytest.fixture(scope="session")
-    def dbt(self, dbt_profiles_dir: Path, dbt_project_dir: Path) -> Generator[Dbt, Any]:
-        yield Dbt(profiles_dir=dbt_profiles_dir, project_dir=dbt_project_dir, target="dev")
+    def dbt(self, dbt_profiles_dir: Path, dbt_project_dir: Path) -> Dbt:
+        return Dbt(profiles_dir=dbt_profiles_dir, project_dir=dbt_project_dir, target="dev")
