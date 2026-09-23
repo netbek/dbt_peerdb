@@ -8,7 +8,7 @@ Each bucket statement sees the source at a different moment: ClickHouse gives a 
 - **Tie-safe watermark contract.** The model must select changed keys with `snapshot >= high_watermark`, where the watermark is the max snapshot in the built target (`W <= S0`). Every mid-build write has stamp `>= S0 >= W`, so the next incremental run re-selects it, including a write stamped exactly `S0`.
 - **Fail-closed detection.** After the bucket loop the macro compares `max(snapshot)` with `S0`. `on_concurrent_writes` defaults to `error`: the build is discarded and the target is left untouched. `warn` and `ignore` are explicit opt-outs.
 
-Residual loss, not closable by the macro. How often it bites depends on where the stamp comes from (see below):
+Residual loss, not closable by the macro. How often it occurs depends on where the stamp comes from (see below):
 
 | Case | Effect |
 |---|---|
