@@ -65,8 +65,11 @@ jobs:
       - name: Install ClickHouse server
         run: uv run --frozen clickhousectl local install $CLICKHOUSE_VERSION
 
+      - name: Create ClickHouse config
+        run: ./scripts/install-clickhouse.sh
+
       - name: Start ClickHouse server
-        run: uv run --frozen clickhousectl local server start --version $CLICKHOUSE_VERSION --http-port 18123 --tcp-port 19000
+        run: uv run --frozen clickhousectl local server start --version $CLICKHOUSE_VERSION --http-port 18123 --tcp-port 19000 --config-file dbt_peerdb
 
       - name: Wait for ClickHouse
         run: |

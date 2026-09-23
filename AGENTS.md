@@ -20,13 +20,24 @@ Set `TZ` once per shell session:
 export TZ=Africa/Johannesburg
 ```
 
+Create ClickHouse config once per shell session:
+
+```shell
+mkdir -p ~/.clickhouse/configs
+cat > ~/.clickhouse/configs/dbt_peerdb.yaml <<'EOF'
+query_log:
+    database: system
+    table: query_log
+EOF
+```
+
 Then use `.venv/bin/clickhousectl` to manage the local server.
 Always use ClickHouse v26.3.33.24 with HTTP port `18123` and TCP port `19000`.
 
 | Action | Command |
 |--------|---------|
 | Install server | `.venv/bin/clickhousectl local install 26.3.33.24` |
-| Start server | `.venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000` |
+| Start server | `.venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000 --config-file dbt_peerdb` |
 | Stop server | `.venv/bin/clickhousectl local server stop` |
 | Connect to server | `.venv/bin/clickhousectl local client --port 19000` |
 | Run query | `.venv/bin/clickhousectl local client --port 19000 --query "select version()"` |
@@ -37,7 +48,15 @@ Use `.venv/bin/pytest`. Integration tests require a running ClickHouse server (s
 
 ```shell
 export TZ=Africa/Johannesburg
-.venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
+
+mkdir -p ~/.clickhouse/configs
+cat > ~/.clickhouse/configs/dbt_peerdb.yaml <<'EOF'
+query_log:
+    database: system
+    table: query_log
+EOF
+
+.venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000 --config-file dbt_peerdb
 .venv/bin/pytest -s
 .venv/bin/clickhousectl local server stop
 ```

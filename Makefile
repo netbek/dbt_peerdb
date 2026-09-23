@@ -19,6 +19,7 @@ install:
 	@./scripts/install-precommit.sh
 	@./scripts/install-skills.sh
 	@./scripts/install-dbt.sh
+	@./scripts/install-clickhouse.sh
 	@./scripts/install-vendor.sh
 
 deps-scan:
@@ -145,13 +146,16 @@ lint:
 # ==============================================================================
 
 clickhouse-start:
-	clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
+	clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000 --config-file dbt_peerdb
 
 clickhouse-stop:
 	clickhousectl local server stop
 
 clickhouse-remove:
 	clickhousectl local server remove
+
+clickhouse-client:
+	clickhousectl local client --port 19000
 
 # ==============================================================================
 # RELEASE
