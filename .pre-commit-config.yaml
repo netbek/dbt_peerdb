@@ -31,6 +31,13 @@ repos:
       - id: isort
         args: [--settings-path, pyproject.toml]
 
+  - repo: https://github.com/PyCQA/docformatter
+    rev: v1.7.8
+    hooks:
+      - id: docformatter
+        additional_dependencies: [tomli]
+        args: [--in-place, --config, pyproject.toml]
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.7
     hooks:
