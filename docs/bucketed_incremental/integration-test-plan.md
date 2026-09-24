@@ -8,7 +8,7 @@
 
 ## What is tested
 
-Every requirement and scenario in `docs/bucketed_incremental/spec.md` and every row of the error reference in `docs/bucketed_incremental/design.md`, asserted through observable effects only: target table contents, dbt run logs, `system.query_log` after `SYSTEM FLUSH LOGS`, and relation lifecycle (`system.tables`).
+Every requirement and scenario in `docs/bucketed_incremental/spec.md` and every row of the error reference in `docs/bucketed_incremental/design.md`, asserted through observable effects only: target table contents, captured dbt events, `system.query_log` after `SYSTEM FLUSH LOGS`, and relation lifecycle (`system.tables`).
 
 Two scenarios are unreachable through the public contract; the suite documents them instead of faking them:
 
@@ -43,11 +43,11 @@ tests/
 
 - `clickhouse_client`: the session-scoped fixture from `tests/conftest.py` (a `dw_lib` client built from the dbt profile), requested by every test and passed to `run_model()`/`create_standard_source()`; `clean_database` uses it for the per-test relation drop and the `system.query_log` precondition check.
 - autouse `clean_database` fixture: drops every relation in `default` before each test (branch on engine: `View` → `drop view`, `Dictionary` → `drop dictionary`, else `drop table`), so leftover `__dbt_tmp`/`__dbt_backup`/`__dbt_new_data_*` never leak between tests.
-- `run_model(dbt, name, clickhouse_client, *, full_refresh=False) -> ModelRun`, capturing, around one `dbt.run(select=name, full_refresh=...)`:
-  - `log`: `logs/dbt.log` bytes appended during the run (offset captured first),
+- `run_model(dbt, name, clickhouse_client, *, full_refresh=False) -> ModelRun`, capturing, around one `dbt.run(select=name, full_refresh=..., capture_events=True)`:
+  - `events`: dbt events (`EventMsg`) collected via the runner callback during the run,
   - `queries`: `system.query_log` statements with `event_time_microseconds >=` a server timestamp taken before the run, read after `SYSTEM FLUSH LOGS`; filtered to initial-query terminal rows and excluding the harness's own queries plus the adapter's `__dbt_exchange_test_*` exchange probe,
   - `result`: the `dbtRunnerResult`.
-- `ModelRun.success`, `ModelRun.failure_text()` (concatenates `result.exception` and each `result.results[i].message`; all `raise_compiler_error` messages are substring-matched), `log_lines(pattern)`, `queries_matching(pattern)`.
+- `ModelRun.success`, `ModelRun.failure_text()` (concatenates `result.exception` and each `result.results[i].message`; all `raise_compiler_error` messages are substring-matched), `event_messages()`, `events_matching(pattern)`, `queries_matching(pattern)`.
 - Source helpers: `create_source(key_type="UInt64", snapshot_type="DateTime64(9)", table="bi_source", include_key/snapshot=True, order_by="tuple()")`, `insert_rows`, `replace_rows`, `fetch_rows`, `query_scalar`, `table_names`, `table_engine`. `Int128`/`Int256` inserts fall back to SQL `insert ... values (toInt128(...))` if the driver rejects native ints.
 - Concurrency helper: `late_writer(...)` context manager spawning a thread with its own client, built from `clickhouse_settings`, that polls `system.processes` for a query like `%sleepEachRow%`, then inserts one row stamped with server `now64(9)`; it joins on exit and re-raises any timeout/insert error so the test fails loudly instead of silently passing.
 
@@ -169,7 +169,7 @@ Also `make lint` (or `pre-commit run ruff-check --hook-stage manual --all-files`
 
 - **Concurrency flake**: bucket zero is slowed with `sleepEachRow(0.5)` and `settings max_threads=1` (server caps at 3 s/row); the writer polls every 20 ms and the helper raises on timeout instead of passing silently.
 - **`clickhouse__create_table_as` emits CREATE EMPTY AS SELECT + INSERT** (`dbt/include/clickhouse/macros/materializations/table.sql:266`), so bucket 0's predicate may appear twice in `query_log`; assertions use sets of bucket indices, not statement counts.
-- **Log capture**: read `logs/dbt.log` from a captured offset after `dbtRunner.invoke` returns; if file flushing proves unreliable, fall back to `capsys` on the `info=True` lines.
+- **Event capture**: `run_model` passes `capture_events=True` so `dbtRunner` collects `EventMsg`s via its callback; `events_matching()` filters the `.msg` text (e.g. `JinjaLogInfo` for the `info=True` log lines). No file-log reads.
 - **`system.query_log` disabled**: the `clickhouse` fixture asserts the table exists and `log_queries = 1` up front and fails with a clear message.
 - **Timezone-rendered bounds**: never assert exact timestamp strings except the `'UTC'` suffix test; rely on regex + bucket index sets.
 - **Tests share one database**: no pytest-xdist; the autouse cleanup drops all relations before each test, and concurrency threads are joined via the context manager.

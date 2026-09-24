@@ -5,9 +5,9 @@ from clickhouse_connect.driver.client import Client
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
+from dbt_common.events.base_types import EventMsg
 from dw_lib.database import ClickHouseSettings
 from dw_lib.dbt import Dbt, DbtInvocationResult
-from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
@@ -16,8 +16,6 @@ import pytest
 import re
 import threading
 import time
-
-LOG_PATH = Path(__file__).parent / "fixtures" / "dbt" / "logs" / "dbt.log"
 
 SOURCE_TABLE = "bi_source"
 SOURCE_COLUMNS = [
@@ -237,15 +235,6 @@ def late_insert_sql(
     )
 
 
-def read_log_since(offset: int) -> str:
-    """Read the dbt log bytes appended since the offset; empty before the log exists."""
-    if not LOG_PATH.exists():
-        return ""
-    with open(LOG_PATH, encoding="utf-8", errors="replace") as handle:
-        handle.seek(offset)
-        return handle.read()
-
-
 def assert_query_log_available(clickhouse_client: Client) -> None:
     """Fail unless system.query_log exists and log_queries is enabled."""
     exists = query_scalar(
@@ -299,10 +288,10 @@ def fetch_executed_queries(clickhouse_client: Client, since: int) -> list[str]:
 
 @dataclass
 class ModelRun:
-    """One dbt run: the runner result plus the captured log text and executed statements."""
+    """One dbt run: the runner result plus captured events and executed statements."""
 
     result: DbtInvocationResult
-    log: str
+    events: list[EventMsg]
     queries: list[str]
 
     @property
@@ -326,10 +315,19 @@ class ModelRun:
 
         return "\n".join(parts)
 
-    def log_lines(self, pattern: str) -> list[str]:
-        """Log lines matching the given regex."""
+    def event_messages(self) -> list[str]:
+        """Captured dbt log messages (e.g. JinjaLogInfo `.msg`) in fire order."""
+        messages: list[str] = []
+        for event in self.events:
+            message = getattr(event.data, "msg", None)
+            if isinstance(message, str) and message:
+                messages.append(message)
+        return messages
+
+    def events_matching(self, pattern: str) -> list[str]:
+        """Captured event messages matching the given regex."""
         regex = re.compile(pattern)
-        return [line for line in self.log.splitlines() if regex.search(line)]
+        return [message for message in self.event_messages() if regex.search(message)]
 
     def queries_matching(self, pattern: str) -> list[str]:
         """Executed statements matching the given case-insensitive regex."""
@@ -427,16 +425,14 @@ class BucketedIncrementalTest(IntegrationTest):
     def run_model(
         self, dbt: Dbt, model: str, clickhouse_client: Client, *, full_refresh: bool = False
     ) -> ModelRun:
-        """Run one model and capture its log tail and the statements executed during the run."""
-        log_offset = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+        """Run one model, capturing dbt events and the statements executed during the run."""
         since = server_marker(clickhouse_client)
 
-        result = dbt.run(select=model, full_refresh=full_refresh)
+        result = dbt.run(select=model, full_refresh=full_refresh, capture_events=True)
 
-        log = read_log_since(log_offset)
         queries = fetch_executed_queries(clickhouse_client, since)
 
-        return ModelRun(result=result, log=log, queries=queries)
+        return ModelRun(result=result, events=result.events, queries=queries)
 
     def create_standard_source(
         self, clickhouse_client: Client, rows: Sequence[Sequence[Any]], **kwargs: Any
@@ -447,7 +443,6 @@ class BucketedIncrementalTest(IntegrationTest):
 
 
 __all__ = [
-    "LOG_PATH",
     "REGIONS",
     "SNAPSHOT_BASE",
     "SOURCE_COLUMNS",

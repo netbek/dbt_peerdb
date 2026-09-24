@@ -60,7 +60,7 @@ class TestConcurrentWrites(BucketedIncrementalTest):
             run = self.run_model(dbt, "bi_concurrent_warn", clickhouse_client, full_refresh=True)
 
         assert run.success is True
-        assert run.log_lines(r"WARNING: concurrent writes to bucket_source_table")
+        assert run.events_matching(r"WARNING: concurrent writes to bucket_source_table")
         assert len(run.queries_matching(r"as writes_detected")) == 1
         assert (
             query_scalar(

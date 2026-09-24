@@ -48,7 +48,7 @@ class TestIncrementalMaintenance(BucketedIncrementalTest):
         assert run.queries_matching(r"__dbt_new_data_")
         assert run.queries_matching(r"delete from")
         assert run.queries_matching(r"insert into")
-        assert run.log_lines(r"Processing bucket") == []
+        assert run.events_matching(r"Processing bucket") == []
         new_data_queries = run.queries_matching(r"__dbt_new_data_")
         assert new_data_queries
         assert all("__BUCKET_PREDICATE__" not in query for query in new_data_queries)

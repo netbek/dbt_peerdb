@@ -99,7 +99,7 @@ error as defensive, so no contract claims testability for it.
 | Task | File |
 |---|---|
 | Session-scoped `clickhouse_client` from `tests/conftest.py`, per-test cleanup that drops all relations (tables/views/dictionaries) and the `system.query_log` precondition check | `tests/helpers.py` |
-| `run_model(dbt, name, clickhouse_client)` captures the dbt log tail and every executed statement from `system.query_log` after `SYSTEM FLUSH LOGS`, returns `ModelRun(success, failure_text(), log_lines(), queries_matching())`; both fixtures are passed in by each test, no binder | `tests/helpers.py` |
+| `run_model(dbt, name, clickhouse_client)` captures dbt events (`capture_events=True`) and every executed statement from `system.query_log` after `SYSTEM FLUSH LOGS`, returns `ModelRun(success, failure_text(), event_messages()/events_matching(), queries_matching())`; both fixtures are passed in by each test, no binder | `tests/helpers.py` |
 | `LateWriter` context manager: builds its own client from the `clickhouse_settings` fixture, polls `system.processes` for the sleeping bucket query and inserts a row stamped `now64(9)`; excludes `system.processes` so it cannot match its own poll | `tests/helpers.py` |
 | Source DDL/DML helpers, row builders, engine/column/relation inspectors | `tests/helpers.py` |
 
