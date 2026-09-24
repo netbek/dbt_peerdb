@@ -44,7 +44,7 @@ those writes, including ties at the bound. The key column type is inferred
 from the source (non-null UUID, signed or unsigned integers) and
 `unique_key` must be that same single column.
 
-Based on the [dbt-clickhouse `incremental` materialization](https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.2/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql).
+Based on the [dbt-clickhouse `incremental` materialization](https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.3/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql).
 Details: [purpose and requirements](docs/bucketed_incremental/spec.md), [design](docs/bucketed_incremental/design.md).
 
 What your model must do:

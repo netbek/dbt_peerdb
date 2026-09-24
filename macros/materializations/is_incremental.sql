@@ -1,4 +1,4 @@
-{# Source: https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.2/dbt/include/clickhouse/macros/materializations/incremental/is_incremental.sql #}
+{# Source: https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.3/dbt/include/clickhouse/macros/materializations/incremental/is_incremental.sql #}
 {% macro is_incremental() %}
     {#-- do not run introspective queries in parsing #}
     {% if not execute %}
