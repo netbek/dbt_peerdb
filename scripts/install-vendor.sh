@@ -11,10 +11,10 @@ source "${SCRIPT_DIR}/common.sh"
 # Fetch vendor projects
 install_vendor() {
     cd "${ROOT_DIR}"
-    git_fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.11.15
+    git_fetch vendor/dbt https://github.com/dbt-labs/dbt-core v1.12.5
     git_fetch vendor/dbt-adapters https://github.com/dbt-labs/dbt-adapters main dbt-adapters
-    git_fetch vendor/dbt-clickhouse https://github.com/ClickHouse/dbt-clickhouse v1.10.2
-    git_fetch vendor/peerdb https://github.com/PeerDB-io/peerdb v0.37.1
+    git_fetch vendor/dbt-clickhouse https://github.com/ClickHouse/dbt-clickhouse v1.10.3
+    git_fetch vendor/peerdb https://github.com/PeerDB-io/peerdb v0.37.10
 }
 
 install_vendor
