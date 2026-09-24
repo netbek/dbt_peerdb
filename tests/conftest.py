@@ -8,6 +8,8 @@ from ruamel.yaml import YAML
 from typing import Any, Literal
 
 import pytest
+import time
+import urllib.request
 
 
 class DbtTargetSettings(BaseModel):
@@ -55,7 +57,44 @@ class IntegrationTest:
     def clickhouse_adapter(
         self, clickhouse_settings: ClickHouseSettings
     ) -> Generator[ClickHouseAdapter, Any]:
-        yield ClickHouseAdapter(clickhouse_settings)
+        timeout = 10
+        pause = 1
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            try:
+                url = f"http://{clickhouse_settings.host}:{clickhouse_settings.port}/ping"
+                with urllib.request.urlopen(url, timeout=1) as response:
+                    if response.status == 200:
+                        break
+            except Exception:  # noqa: BLE001, S110
+                pass
+            time.sleep(pause)
+        else:
+            raise TimeoutError("Timeout reached while waiting for ClickHouse server")
+
+        clickhouse_adapter = ClickHouseAdapter(clickhouse_settings)
+
+        with clickhouse_adapter.create_client() as clickhouse_client:
+            while time.monotonic() < deadline:
+                try:
+                    exists = clickhouse_client.query(
+                        "select count() from system.tables "
+                        "where database = 'system' and name = 'query_log'"
+                    ).first_row[0]
+                    if exists:
+                        log_queries = clickhouse_client.query(
+                            "select value from system.settings where name = 'log_queries'"
+                        ).first_row[0]
+                        if str(log_queries) == "1":
+                            break
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                time.sleep(pause)
+            else:
+                raise TimeoutError("Timeout reached while waiting for ClickHouse system.query_log")
+
+        yield clickhouse_adapter
 
     @pytest.fixture(scope="session")
     def clickhouse_client(self, clickhouse_adapter: ClickHouseAdapter) -> Generator[Client, Any]:
