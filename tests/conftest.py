@@ -8,6 +8,7 @@ from ruamel.yaml import YAML
 from typing import Any, Literal
 
 import pytest
+import time
 
 
 class DbtTargetSettings(BaseModel):
@@ -61,6 +62,29 @@ class IntegrationTest:
     def clickhouse_client(self, clickhouse_adapter: ClickHouseAdapter) -> Generator[Client, Any]:
         with clickhouse_adapter.create_client() as clickhouse_client:
             yield clickhouse_client
+
+    @pytest.fixture(scope="session", autouse=True)
+    def wait_for_query_log(self, clickhouse_client: Client) -> None:
+        """Wait for system.query_log to attach after server start, before any test runs."""
+        timeout: float = 60.0
+        pause: float = 0.5
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                exists = clickhouse_client.query(
+                    "select count() from system.tables "
+                    "where database = 'system' and name = 'query_log'"
+                ).first_row[0]
+                if exists:
+                    log_queries = clickhouse_client.query(
+                        "select value from system.settings where name = 'log_queries'"
+                    ).first_row[0]
+                    if str(log_queries) == "1":
+                        return
+            except Exception:  # noqa: BLE001, S110
+                pass
+            time.sleep(pause)
+        raise TimeoutError("Timeout reached while waiting on system.query_log")
 
     @pytest.fixture(scope="session")
     def dbt_profiles_dir(self) -> Path:
