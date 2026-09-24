@@ -692,7 +692,7 @@ wheels = [
 
 [[package]]
 name = "netbek-dw-lib"
-version = "1.37.2"
+version = "1.37.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
@@ -707,9 +707,9 @@ dependencies = [
     { name = "sqlglot" },
     { name = "sqlparse" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/22/e19b9a0228514f8dd7c6c510cd77241a2151b201be454b3daca04db912d4/netbek_dw_lib-1.37.2.tar.gz", hash = "sha256:fdfb9bc94f580992c5c91b4716d94af342b5956914c48d0e97eec4021776c693", size = 44294, upload-time = "2026-09-24T06:57:51.508Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/25/374ff32fb73003ac27b68703eda964b8daa594d5d1e94a43eb5eb9826a8b/netbek_dw_lib-1.37.3.tar.gz", hash = "sha256:e42d0298f745f7cd2a4c4293070c3258f406b078ef875ea9390658ebf1c572ba", size = 49957, upload-time = "2026-09-24T11:21:33.721Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/e6/022bb9a594c2106023505460d5d1ccb5eabf9517bcceecc581260f347ffd/netbek_dw_lib-1.37.2-py3-none-any.whl", hash = "sha256:2f8526f81171136b09de7069281e8608af32b1112a4c6d32e3829e4872b95c57", size = 55766, upload-time = "2026-09-24T06:57:50.131Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/82/2b3b416ae9251196c81e3389b507b3f1235101cb532346fe10ef1a3afb82/netbek_dw_lib-1.37.3-py3-none-any.whl", hash = "sha256:0f4ede70c04291ee90b5ccff516695475cc01e10aa9fb197eb84452ce2e70da7", size = 61276, upload-time = "2026-09-24T11:21:31.661Z" },
 ]
 
 [package.optional-dependencies]
