@@ -1,4 +1,4 @@
-{# Source: https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.2/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql #}
+{# Source: https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.3/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql #}
 {% materialization bucketed_incremental, adapter='clickhouse' %}
 
   {%- set existing_relation = load_cached_relation(this) -%}

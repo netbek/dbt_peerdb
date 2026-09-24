@@ -5,9 +5,8 @@ from clickhouse_connect.driver.client import Client
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
-from dbt.cli.main import dbtRunnerResult
 from dw_lib.database import ClickHouseSettings
-from dw_lib.dbt import Dbt
+from dw_lib.dbt import Dbt, DbtInvocationResult
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -302,23 +301,23 @@ def fetch_executed_queries(clickhouse_client: Client, since: int) -> list[str]:
 class ModelRun:
     """One dbt run: the runner result plus the captured log text and executed statements."""
 
-    result: dbtRunnerResult
+    result: DbtInvocationResult
     log: str
     queries: list[str]
 
     @property
     def success(self) -> bool:
         """Whether the dbt run succeeded."""
-        return bool(self.result.success)
+        return bool(self.result.runner_result.success)
 
     def failure_text(self) -> str:
         """Exception and node messages from the run, joined for substring assertions."""
         parts: list[str] = []
 
-        if self.result.exception is not None:
-            parts.append(str(self.result.exception))
+        if self.result.runner_result.exception is not None:
+            parts.append(str(self.result.runner_result.exception))
 
-        result = self.result.result
+        result = self.result.runner_result.result
         if result is not None and hasattr(result, "results"):
             for node_result in result.results:
                 message = getattr(node_result, "message", None)
