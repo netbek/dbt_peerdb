@@ -283,7 +283,7 @@ The integration harness runs ClickHouse 26.3.33.24 as a local server managed by 
 | Contract | Snapshot bound, detection modes | `<=` bounds on every bucket query; mid-build writer test |
 | Incremental | Delete+insert, schema change, watermark tie | Only touched keys replaced; a row stamped `S0` recaptured |
 
-`tests/helpers.py` captures both observable effects per run: the dbt log tail and the statements in `system.query_log` since a server timestamp marker, read after `SYSTEM FLUSH LOGS` and filtered of the harness's own reads and the adapter's atomic-exchange probe. The concurrency tests slow the build with `sleepEachRow` (pinned to one thread), and `LateWriter` runs a background thread that polls `system.processes` for that query, then inserts a row stamped with `now64(9)`, so the write always lands between the count query and the detection query.
+`tests/helpers.py` captures both observable effects per run: the dbt events collected via `capture_events=True` and the statements in `system.query_log` since a server timestamp marker, read after `SYSTEM FLUSH LOGS` and filtered of the harness's own reads and the adapter's atomic-exchange probe. The concurrency tests slow the build with `sleepEachRow` (pinned to one thread), and `LateWriter` runs a background thread that polls `system.processes` for that query, then inserts a row stamped with `now64(9)`, so the write always lands between the count query and the detection query.
 
 ## Open questions
 

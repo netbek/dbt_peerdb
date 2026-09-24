@@ -67,9 +67,11 @@ class TestFullRefresh(BucketedIncrementalTest):
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is True
-        assert "bucketed_incremental: row_count=11 bucket_count=4 snapshot_max=" in run.log
+        assert run.events_matching(
+            r"bucketed_incremental: row_count=11 bucket_count=4 snapshot_max="
+        )
         for bucket in range(1, 5):
-            assert run.log_lines(rf"Processing bucket {bucket} of 4")
+            assert run.events_matching(rf"Processing bucket {bucket} of 4")
 
         indices = set()
         bucket_queries = run.queries_matching(
@@ -91,9 +93,11 @@ class TestFullRefresh(BucketedIncrementalTest):
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is True
-        assert "bucketed_incremental: row_count=12 bucket_count=4 snapshot_max=" in run.log
+        assert run.events_matching(
+            r"bucketed_incremental: row_count=12 bucket_count=4 snapshot_max="
+        )
         for bucket in range(1, 5):
-            assert run.log_lines(rf"Processing bucket {bucket} of 4")
+            assert run.events_matching(rf"Processing bucket {bucket} of 4")
 
         indices = set()
         for query in run.queries_matching(r"id % 4 = \d+ and _peerdb_synced_at <= toDateTime64\("):
@@ -111,9 +115,11 @@ class TestFullRefresh(BucketedIncrementalTest):
         run = self.run_model(dbt, "bi_one_per_bucket", clickhouse_client)
 
         assert run.success is True
-        assert "bucketed_incremental: row_count=3 bucket_count=3 snapshot_max=" in run.log
+        assert run.events_matching(
+            r"bucketed_incremental: row_count=3 bucket_count=3 snapshot_max="
+        )
         for bucket in range(1, 4):
-            assert run.log_lines(rf"Processing bucket {bucket} of 3")
+            assert run.events_matching(rf"Processing bucket {bucket} of 3")
 
         indices = set()
         for query in run.queries_matching(r"id % 3 = \d+ and _peerdb_synced_at <= toDateTime64\("):
@@ -140,7 +146,7 @@ class TestFullRefresh(BucketedIncrementalTest):
         run = self.run_model(dbt, "bi_defaults", clickhouse_client)
 
         assert run.success is True
-        assert "bucket_count=1" in run.log
+        assert run.events_matching(r"bucket_count=1")
         assert len(run.queries_matching(r"as writes_detected")) == 1
 
     def test_empty_source_builds_empty_table(self, dbt: Dbt, clickhouse_client: Client):
@@ -152,8 +158,8 @@ class TestFullRefresh(BucketedIncrementalTest):
 
         assert run.success is True
         assert query_scalar(clickhouse_client, "select count() from default.bi_basic") == 0
-        assert "bucket_count=0" in run.log
-        assert run.log_lines(r"Processing bucket") == []
+        assert run.events_matching(r"bucket_count=0")
+        assert run.events_matching(r"Processing bucket") == []
         assert run.queries_matching(r"where 1 = 0")
         assert run.queries_matching(r"as writes_detected") == []
 
@@ -265,17 +271,17 @@ class TestFullRefresh(BucketedIncrementalTest):
 
         first = self.run_model(dbt, "bi_basic", clickhouse_client)
         assert first.success is True
-        assert first.log_lines(r"bucketed_incremental: row_count=")
+        assert first.events_matching(r"bucketed_incremental: row_count=")
         assert first.queries_matching(r"__dbt_new_data_") == []
 
         second = self.run_model(dbt, "bi_basic", clickhouse_client)
         assert second.success is True
-        assert second.log_lines(r"bucketed_incremental: row_count=") == []
+        assert second.events_matching(r"bucketed_incremental: row_count=") == []
         assert second.queries_matching(r"__dbt_new_data_")
 
         third = self.run_model(dbt, "bi_basic", clickhouse_client, full_refresh=True)
         assert third.success is True
-        assert third.log_lines(r"bucketed_incremental: row_count=")
+        assert third.events_matching(r"bucketed_incremental: row_count=")
         assert third.queries_matching(r"EXCHANGE TABLES")
 
     def test_package_qualified_incremental_detection(self, dbt: Dbt, clickhouse_client: Client):
@@ -288,7 +294,7 @@ class TestFullRefresh(BucketedIncrementalTest):
 
         first = self.run_model(dbt, "bi_incremental_detection", clickhouse_client)
         assert first.success is True
-        assert first.log_lines(r"bucketed_incremental: row_count=")
+        assert first.events_matching(r"bucketed_incremental: row_count=")
         assert (
             query_scalar(
                 clickhouse_client,

@@ -75,7 +75,7 @@ class TestConfigurationValidation(BucketedIncrementalTest):
         assert run.success is False
         assert expected in run.failure_text()
         assert run.queries_matching(r"__dbt_tmp") == []
-        assert run.log_lines(r"Processing bucket") == []
+        assert run.events_matching(r"Processing bucket") == []
 
     def test_validation_runs_before_hooks(self, dbt: Dbt, clickhouse_client: Client):
         """Invalid config fails before the pre-hook can create its sentinel table."""
