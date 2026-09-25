@@ -99,8 +99,7 @@ A dropped source mid-build raises the adapter error rather than the fail-closed 
 
 ## 5. Source and key probing
 
-- `bucket_source_table.split('.')` at `L112` is safe because the regex at `L54` already restricts input to exactly `database.table` with bare identifiers.
-- `adapter.get_relation(database=parts[0], schema=parts[0], ...)` passes the same value twice. Correct for ClickHouse where schema aliases database, but record the assumption for adapter upgrades.
+- The bucket relation comes from `ref()`/`source()`; the probe passes `bucket_relation.database`, `bucket_relation.schema` and `bucket_relation.identifier` to `adapter.get_relation`. ClickHouse ignores `database` and aliases schema to database, but the macro splits no strings and assumes no string shape.
 - `countIf(key < 0)` is emitted for both signed and unsigned integers. For `UInt*` it is always zero: one wasted aggregate inside an otherwise single-pass `count(), countIf, max()` query. Leave as is or restrict to signed types.
 - `snapshot_str` roundtrip `toString(max) -> toDateTime64('S0', 9[, TZ])` preserves 9 digits and timezone. DST fold ambiguity in string roundtrip is a one-hour edge in a narrow window; acceptable and narrower than the documented backdate residual.
 - Watermark provenance: PeerDB `_peerdb_synced_at` is destination-stamped at normalize time (monotonic per node), so backdates need skew, step-back, or manual writes; own updated-at columns are source-stamped, making backdates routine. Operator docs (README, design, concurrent-writes doc, spec note, macro comment, T9 test docstrings) now state the split explicitly.

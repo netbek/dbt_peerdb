@@ -18,7 +18,8 @@
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
   {%- set bucket_key_column = config.get('bucket_key_column', none) -%}
   {%- set rows_per_bucket = config.get('rows_per_bucket', 100000) -%}
-  {%- set bucket_source_table = config.get('bucket_source_table', none) -%}
+  {%- set bucket_ref = config.get('bucket_ref', none) -%}
+  {%- set bucket_source = config.get('bucket_source', none) -%}
   {%- set bucket_snapshot_column = config.get('bucket_snapshot_column', none) -%}
   {%- set on_concurrent_writes = config.get('on_concurrent_writes', 'error') -%}
   {%- set marker = '-- __BUCKET_PREDICATE__' -%}
@@ -30,7 +31,6 @@
   {%- set preexisting_backup_relation = load_cached_relation(backup_relation) -%}
 
   {%- set identifier_pattern = '^[A-Za-z_][A-Za-z0-9_]*$' -%}
-  {%- set source_pattern = '^[A-Za-z_][A-Za-z0-9_]*[.][A-Za-z_][A-Za-z0-9_]*$' -%}
 
   {% if bucket_key_column is none or bucket_key_column is not string or not modules.re.match(identifier_pattern, bucket_key_column|trim) %}
     {{ exceptions.raise_compiler_error(
@@ -51,13 +51,41 @@
         'bucketed_incremental: bucket_snapshot_column must be a different column from bucket_key_column.'
     ) }}
   {% endif %}
-  {% if bucket_source_table is none or bucket_source_table is not string or not modules.re.match(source_pattern, bucket_source_table|trim) %}
+  {% set bucket_config_keys = [] %}
+  {% if bucket_ref is not none %}{% do bucket_config_keys.append('bucket_ref') %}{% endif %}
+  {% if bucket_source is not none %}{% do bucket_config_keys.append('bucket_source') %}{% endif %}
+  {% if bucket_config_keys|length == 0 %}
     {{ exceptions.raise_compiler_error(
-        'bucketed_incremental: bucket_source_table is required and must have the form "database.table" '
-        ~ 'with bare identifiers (letters, digits, underscore), got "' ~ bucket_source_table ~ '".'
+        'bucketed_incremental: set exactly one of bucket_ref or bucket_source, but neither was set.'
+    ) }}
+  {% elif bucket_config_keys|length > 1 %}
+    {{ exceptions.raise_compiler_error(
+        'bucketed_incremental: set exactly one of bucket_ref or bucket_source, but both were set '
+        ~ '(bucket_ref="' ~ bucket_ref ~ '", bucket_source="' ~ bucket_source ~ '").'
     ) }}
   {% endif %}
-  {% set bucket_source_table = bucket_source_table|trim %}
+  {% set bucket_config_key = bucket_config_keys[0] %}
+  {% set bucket_config_value = bucket_ref if bucket_config_key == 'bucket_ref' else bucket_source %}
+  {#- Check the scalar/sequence shape before iterating, so a mis-typed value yields this error
+      rather than a Jinja type error. Lists and tuples pass; strings, mappings, sets and
+      generators do not. Elements are matched as given (no trimming). -#}
+  {% set bucket_config_message = (
+      'bucket_ref must be a list or tuple of one or two bare identifiers (letters, digits, underscore) '
+      ~ 'matching ref() arguments, got "' ~ bucket_ref ~ '".'
+      if bucket_config_key == 'bucket_ref'
+      else 'bucket_source must be a list or tuple of exactly two bare identifiers (letters, digits, underscore) '
+      ~ 'matching source() arguments, got "' ~ bucket_source ~ '".'
+  ) %}
+  {% set bucket_config_lengths = [1, 2] if bucket_config_key == 'bucket_ref' else [2] %}
+  {% if bucket_config_value is not sequence or bucket_config_value is string
+      or bucket_config_value is mapping or (bucket_config_value|length) not in bucket_config_lengths %}
+    {{ exceptions.raise_compiler_error('bucketed_incremental: ' ~ bucket_config_message) }}
+  {% endif %}
+  {% for part in bucket_config_value %}
+    {% if part is not string or not modules.re.match(identifier_pattern, part) %}
+      {{ exceptions.raise_compiler_error('bucketed_incremental: ' ~ bucket_config_message) }}
+    {% endif %}
+  {% endfor %}
   {% if unique_key is none or unique_key != bucket_key_column %}
     {{ exceptions.raise_compiler_error(
         'bucketed_incremental: unique_key must be the single bucket_key_column "'
@@ -109,19 +137,27 @@
           ~ marker_count ~ '.'
       ) }}
     {% endif %}
-    {% set bucket_parts = bucket_source_table.split('.') %}
+    {% if bucket_config_key == 'bucket_ref' %}
+      {% set bucket_resolved_relation = ref(bucket_ref[0]) if bucket_ref|length == 1
+          else ref(bucket_ref[0], bucket_ref[1]) %}
+    {% else %}
+      {% set bucket_resolved_relation = source(bucket_source[0], bucket_source[1]) %}
+    {% endif %}
+    {% set bucket_relation_name = bucket_resolved_relation.schema ~ '.' ~ bucket_resolved_relation.identifier %}
     {% set bucket_relation = adapter.get_relation(
-        database=bucket_parts[0], schema=bucket_parts[0], identifier=bucket_parts[1]
+        database=bucket_resolved_relation.database,
+        schema=bucket_resolved_relation.schema,
+        identifier=bucket_resolved_relation.identifier
     ) %}
     {% if bucket_relation is none %}
       {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
+          'bucketed_incremental: ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name
           ~ '" not found for model "' ~ model.name ~ '".'
       ) }}
     {% endif %}
     {% if bucket_relation.type != 'table' %}
       {{ exceptions.raise_compiler_error(
-          'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
+          'bucketed_incremental: ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name
           ~ '" must be a table, got type "' ~ bucket_relation.type ~ '".'
       ) }}
     {% endif %}
@@ -144,7 +180,7 @@
     {% if ns.bucket_dtype is none %}
       {{ exceptions.raise_compiler_error(
           'bucketed_incremental: bucket_key_column "' ~ bucket_key_column
-          ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
+          ~ '" not found in ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name ~ '".'
       ) }}
     {% endif %}
     {% if ns.bucket_wrapped %}
@@ -174,7 +210,7 @@
     {% if ns.snapshot_dtype is none %}
       {{ exceptions.raise_compiler_error(
           'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
-          ~ '" not found in bucket_source_table "' ~ bucket_source_table ~ '".'
+          ~ '" not found in ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name ~ '".'
       ) }}
     {% endif %}
     {% if ns.snapshot_wrapped or not modules.re.match("^DateTime64[(]9(, *'[^']+')?[)]$", ns.snapshot_dtype) %}
@@ -210,18 +246,17 @@
       {% set snapshot_idx = 1 %}
     {% endif %}
     {% do count_select.append('toString(max(' ~ bucket_snapshot_column ~ ')) as snapshot_max') %}
-    {% set count_sql %}select {{ count_select | join(', ') }} from {{ bucket_source_table }}{% endset %}
+    {% set count_sql %}select {{ count_select | join(', ') }} from {{ bucket_resolved_relation }}{% endset %}
     {% set count_result = run_query(count_sql) %}
     {% set row_count = count_result.columns[0].values()[0] | int %}
     {% if bucket_key_type in ('int', 'uint') %}
       {% set negative_key_count = count_result.columns[1].values()[0] | int %}
       {% if negative_key_count > 0 %}
         {{ exceptions.raise_compiler_error(
-            'bucketed_incremental: bucket_source_table "' ~ bucket_source_table
+            'bucketed_incremental: ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name
             ~ '" has ' ~ negative_key_count ~ ' negative values in "' ~ bucket_key_column
             ~ '". Negative integer keys cannot be bucketed (the bucket maths uses '
-            ~ 'modulo), so a full refresh would silently drop them. Use a '
-            ~ 'non-negative key column.'
+            ~ 'modulo), so a full refresh would silently drop them.'
         ) }}
       {% endif %}
     {% endif %}
@@ -236,7 +271,7 @@
     {% if snapshot_str is none and row_count > 0 %}
       {{ exceptions.raise_compiler_error(
           'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
-          ~ '" has no usable maximum in bucket_source_table "' ~ bucket_source_table ~ '".'
+          ~ '" has no usable maximum in ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name ~ '".'
       ) }}
     {% endif %}
     {% if snapshot_str is none %}
@@ -290,20 +325,20 @@
       {% endfor %}
     {% endif %}
     {% if snapshot_str is not none and row_count > 0 and on_concurrent_writes != 'ignore' %}
-      {% set post_count_sql %}select max({{ bucket_snapshot_column }}) > {{ snapshot_literal }} as writes_detected from {{ bucket_source_table }}{% endset %}
+      {% set post_count_sql %}select max({{ bucket_snapshot_column }}) > {{ snapshot_literal }} as writes_detected from {{ bucket_resolved_relation }}{% endset %}
       {% set post_count_result = run_query(post_count_sql) %}
       {% set writes_detected = post_count_result.columns[0].values()[0] %}
       {% if writes_detected %}
         {% if on_concurrent_writes == 'error' %}
           {{ exceptions.raise_compiler_error(
-              'bucketed_incremental: concurrent writes to bucket_source_table "' ~ bucket_source_table
+              'bucketed_incremental: concurrent writes to ' ~ bucket_config_key ~ ' "' ~ bucket_relation_name
               ~ '" detected during the rebuild (snapshot bound ' ~ snapshot_str ~ ' exceeded). '
               ~ 'Re-run against a quiesced source; the previous table was left untouched.'
           ) }}
         {% else %}
           {{ log(
-              'bucketed_incremental: WARNING: concurrent writes to bucket_source_table "'
-              ~ bucket_source_table
+              'bucketed_incremental: WARNING: concurrent writes to ' ~ bucket_config_key ~ ' "'
+              ~ bucket_relation_name
               ~ '" detected during the rebuild; run an incremental afterwards to converge.',
               info=True,
           ) }}

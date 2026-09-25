@@ -32,12 +32,27 @@ CONFIG_ERROR_CASES = [
         "bucket_snapshot_column must be a different column from bucket_key_column",
     ),
     (
-        "bi_source_missing_config",
-        'bucket_source_table is required and must have the form "database.table"',
+        "bi_relation_missing_config",
+        "set exactly one of bucket_ref or bucket_source, but neither was set",
     ),
     (
-        "bi_source_invalid_config",
-        'bucket_source_table is required and must have the form "database.table"',
+        "bi_relation_both_config",
+        "set exactly one of bucket_ref or bucket_source, but both were set",
+    ),
+    (
+        "bi_relation_invalid_config",
+        "bucket_ref must be a list or tuple of one or two bare identifiers",
+    ),
+    ("bi_ref_empty", "bucket_ref must be a list or tuple of one or two bare identifiers"),
+    ("bi_ref_three", "bucket_ref must be a list or tuple of one or two bare identifiers"),
+    ("bi_ref_bad_element", "bucket_ref must be a list or tuple of one or two bare identifiers"),
+    ("bi_source_empty", "bucket_source must be a list or tuple of exactly two bare identifiers"),
+    ("bi_source_one", "bucket_source must be a list or tuple of exactly two bare identifiers"),
+    ("bi_source_three", "bucket_source must be a list or tuple of exactly two bare identifiers"),
+    ("bi_source_nonlist", "bucket_source must be a list or tuple of exactly two bare identifiers"),
+    (
+        "bi_source_bad_element",
+        "bucket_source must be a list or tuple of exactly two bare identifiers",
     ),
     ("bi_unique_key_missing", 'unique_key must be the single bucket_key_column "id"'),
     ("bi_unique_key_mismatch", 'unique_key must be the single bucket_key_column "id"'),
@@ -121,18 +136,18 @@ class TestMarkerValidation(BucketedIncrementalTest):
 class TestSourceContract(BucketedIncrementalTest):
     """Source probe.
 
-    bucket_source_table must resolve to a table, and key and snapshot columns are read with
+    The resolved bucket relation must resolve to a table, and key and snapshot columns are read with
     data_type, so Nullable/LowCardinality wrappers are rejected.
     """
 
     def test_source_missing(self, dbt: Dbt, clickhouse_client: Client):
-        """A bucket_source_table that does not exist stops the run, naming the model and table."""
+        """A bucket_source relation that does not exist stops the run, naming the model and
+        relation."""
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is False
         assert (
-            'bucket_source_table "default.bi_source" not found for model "bi_basic"'
-            in run.failure_text()
+            'bucket_source "default.bi_source" not found for model "bi_basic"' in run.failure_text()
         )
 
     def test_source_is_not_a_table(self, dbt: Dbt, clickhouse_client: Client):
@@ -143,19 +158,19 @@ class TestSourceContract(BucketedIncrementalTest):
 
         assert run.success is False
         assert (
-            'bucket_source_table "default.bi_source" must be a table, got type "view"'
+            'bucket_source "default.bi_source" must be a table, got type "view"'
             in run.failure_text()
         )
 
     def test_key_column_missing(self, dbt: Dbt, clickhouse_client: Client):
-        """A bucket_key_column absent from the source stops the run."""
+        """A bucket_key_column absent from the relation stops the run."""
         create_source(clickhouse_client, include_key=False)
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is False
         assert (
-            'bucket_key_column "id" not found in bucket_source_table "default.bi_source"'
+            'bucket_key_column "id" not found in bucket_source "default.bi_source"'
             in run.failure_text()
         )
 
@@ -177,14 +192,14 @@ class TestSourceContract(BucketedIncrementalTest):
         assert "expected a non-null UUID, signed integer or unsigned integer column" in failure
 
     def test_snapshot_column_missing(self, dbt: Dbt, clickhouse_client: Client):
-        """A bucket_snapshot_column absent from the source stops the run."""
+        """A bucket_snapshot_column absent from the relation stops the run."""
         create_source(clickhouse_client, include_snapshot=False)
 
         run = self.run_model(dbt, "bi_basic", clickhouse_client)
 
         assert run.success is False
         assert (
-            'bucket_snapshot_column "_peerdb_synced_at" not found in bucket_source_table '
+            'bucket_snapshot_column "_peerdb_synced_at" not found in bucket_source '
             '"default.bi_source"' in run.failure_text()
         )
 
@@ -213,3 +228,102 @@ class TestSourceContract(BucketedIncrementalTest):
 
         assert run.success is False
         assert 'has 1 negative values in "id"' in run.failure_text()
+
+
+class TestRefBranchContract(BucketedIncrementalTest):
+    """The ref branch resolves through ref() and shares the same relation contract."""
+
+    def test_ref_relation_missing(self, dbt: Dbt, clickhouse_client: Client):
+        """A bucket_ref target that does not exist stops the run, naming the ref relation."""
+        run = self.run_model(dbt, "bi_ref", clickhouse_client)
+
+        assert run.success is False
+        assert (
+            'bucket_ref "default.bi_ref_source" not found for model "bi_ref"' in run.failure_text()
+        )
+
+    def test_ref_relation_is_not_a_table(self, dbt: Dbt, clickhouse_client: Client):
+        """A view where the ref target should be a table stops the run."""
+        clickhouse_client.command("create view default.bi_ref_source as select 1 as id")
+
+        run = self.run_model(dbt, "bi_ref", clickhouse_client)
+
+        assert run.success is False
+        assert (
+            'bucket_ref "default.bi_ref_source" must be a table, got type "view"'
+            in run.failure_text()
+        )
+
+    def test_ref_key_column_missing(self, dbt: Dbt, clickhouse_client: Client):
+        """A bucket_key_column absent from the ref relation stops the run."""
+        create_source(clickhouse_client, table="bi_ref_source", include_key=False)
+
+        run = self.run_model(dbt, "bi_ref", clickhouse_client)
+
+        assert run.success is False
+        assert (
+            'bucket_key_column "id" not found in bucket_ref "default.bi_ref_source"'
+            in run.failure_text()
+        )
+
+    def test_ref_snapshot_column_missing(self, dbt: Dbt, clickhouse_client: Client):
+        """A bucket_snapshot_column absent from the ref relation stops the run."""
+        create_source(clickhouse_client, table="bi_ref_source", include_snapshot=False)
+
+        run = self.run_model(dbt, "bi_ref", clickhouse_client)
+
+        assert run.success is False
+        assert (
+            'bucket_snapshot_column "_peerdb_synced_at" not found in bucket_ref '
+            '"default.bi_ref_source"' in run.failure_text()
+        )
+
+
+class TestResolutionAndTiming(BucketedIncrementalTest):
+    """Resolution failures surface as dbt errors; incremental runs skip resolution."""
+
+    def test_unknown_ref_stops_run(self, dbt: Dbt, clickhouse_client: Client):
+        """A bucket_ref naming a model that is not in the manifest stops the run with dbt's
+        resolution error."""
+        run = self.run_model(dbt, "bi_ref_unknown", clickhouse_client)
+
+        assert run.success is False
+        assert "bi_not_a_model" in run.failure_text()
+
+    def test_unknown_source_stops_run(self, dbt: Dbt, clickhouse_client: Client):
+        """A bucket_source naming an undeclared source stops the run with dbt's resolution error."""
+        run = self.run_model(dbt, "bi_source_unknown", clickhouse_client)
+
+        assert run.success is False
+        assert "bi_not_declared" in run.failure_text()
+
+    def test_incremental_run_skips_resolution(self, dbt: Dbt, clickhouse_client: Client):
+        """An incremental run never resolves bucket_ref: if it did, the unknown ref target would
+        stop it.
+
+        The existing target was created outside dbt.
+        """
+        clickhouse_client.command(
+            "create table default.bi_ref_unknown (id UInt64) engine MergeTree order by tuple()"
+        )
+
+        run = self.run_model(dbt, "bi_ref_unknown", clickhouse_client)
+
+        assert run.success is True
+        assert run.events_matching(r"row_count=") == []
+
+    def test_incremental_run_rejects_bad_shape(self, dbt: Dbt, clickhouse_client: Client):
+        """Shape validation runs on incremental runs too: with an existing target the run is
+        incremental, yet the wrong-shaped key still stops it before any bucket work."""
+        clickhouse_client.command(
+            "create table default.bi_ref_bad_element (id UInt64) engine MergeTree order by tuple()"
+        )
+
+        run = self.run_model(dbt, "bi_ref_bad_element", clickhouse_client)
+
+        assert run.success is False
+        assert (
+            "bucket_ref must be a list or tuple of one or two bare identifiers"
+            in run.failure_text()
+        )
+        assert run.queries_matching(r"__dbt_tmp") == []

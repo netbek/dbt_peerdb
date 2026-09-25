@@ -6,7 +6,7 @@
     unique_key='id',
     bucket_key_column='id',
     bucket_snapshot_column='_peerdb_synced_at',
-    bucket_source_table='bi_source',
+    bucket_ref=['bi_ref_source', 'extra_one', 'extra_two'],
     rows_per_bucket=3,
 ) }}
 select 1 as id

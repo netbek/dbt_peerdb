@@ -27,8 +27,9 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 | Term | Meaning |
 |------|---------|
 | Bucket | One pass over the source, filtered to a subset of keys |
-| `bucket_key_column` | The key column that defines the buckets; must equal `unique_key`. The repetition is intentional: it turns a silent bucketing corruption (versions of one row splitting across buckets) into a compile-time error (see D4) |
-| `bucket_source_table` | The `database.table` relation the macro counts and type-checks |
+| `bucket_key_column` | The key column that defines the buckets; must equal `unique_key`. The repetition is intentional: it turns a silent bucketing corruption (versions of one row splitting across buckets) into a compile-time error (see D3) |
+| `bucket_ref` / `bucket_source` | The two model configs that name the relation to count and type-check; set exactly one. `bucket_ref` lists one or two identifiers for `ref()`; `bucket_source` lists exactly two for `source()` |
+| Bucket relation | The relation the set config resolves to through `ref()` or `source()`; the macro counts, probes and detects against it |
 | `bucket_snapshot_column` | The snapshot column; names a column, not a threshold. A non-null `DateTime64(9)` column that orders writes, usually `_peerdb_synced_at`. Destination-stamped under PeerDB, source-stamped for own updated-at columns (see the provenance note in `concurrent-writes-data-loss.md`) |
 | Snapshot column | The role `bucket_snapshot_column` plays: the column whose maximum orders the build |
 | `S0` | The snapshot bound (a value): the maximum snapshot value captured before bucket 0 |
@@ -49,13 +50,13 @@ existing table, normal run   ──► delete+insert ──► grants, docs, hoo
 ### Full-refresh path
 
 1. **Resolve.** Load the existing relation, config values and relation handles: `target_relation` (`this` as a table), `intermediate_relation` (`<identifier>__dbt_tmp`) and `backup_relation` (`<identifier>__dbt_backup`).
-2. **Validate.** Check every rule in [Configuration reference](#configuration-reference) and [Error reference](#error-reference). The checks read only config values, so they run before any database work.
+2. **Validate.** Check every rule in the [Configuration reference](#configuration-reference). These checks read only config values, so they run before any database work; the probe-time errors in the [Error reference](#error-reference) surface at the steps below.
 3. **Prepare.** Drop leftover intermediate and backup relations, then run pre-hooks (outside and inside the transaction).
-4. **Probe the source.** Resolve `bucket_source_table`, require a table, and read its columns with `adapter.get_columns_in_relation`. Infer the internal key type from the key dtype (`UUID`, signed `Int*`, unsigned `UInt*`; anything else stops the run) and check the snapshot dtype against `DateTime64(9)`.
+4. **Probe the source.** Resolve the bucket relation from `bucket_ref` or `bucket_source` with `ref()`/`source()`, require a table, and read its columns with `adapter.get_columns_in_relation`. Infer the internal key type from the key dtype (`UUID`, signed `Int*`, unsigned `UInt*`; anything else stops the run) and check the snapshot dtype against `DateTime64(9)`.
 5. **Count.** One query returns `count()` as `row_count`, `countIf(bucket_key_column < 0)` for integer keys, and `toString(max(bucket_snapshot_column))` as `snapshot_max`.
 6. **Size.** `bucket_count = ceil(row_count / rows_per_bucket)`, at least 1 unless the source is empty. The macro logs row count, bucket count and `S0`.
 7. **Bucket loop.** For bucket `i`: replace the marker with `where <key expression> % <bucket_count> = <i> and <snapshot column> <= <S0 literal>`; the first bucket creates the intermediate relation with a CTAS, the rest insert into it with `clickhouse__insert_into`. The key expression is `reinterpretAsUInt64(bucket_key_column)` for `uuid` and the bare column otherwise.
-8. **Detect.** Query `select max(bucket_snapshot_column) > <S0 literal> as writes_detected from bucket_source_table`. `error` stops before the publish step; `warn` logs; `ignore` skips the query.
+8. **Detect.** Query `select max(bucket_snapshot_column) > <S0 literal> as writes_detected from <bucket relation>`. `error` stops before the publish step; `warn` logs; `ignore` skips the query.
 9. **Publish and finish.** Rename or exchange the intermediate relation into place, apply grants, persist docs, create indexes, run post-hooks, commit, drop the backup, run outside-transaction post-hooks.
 
 An empty source skips the loop: the marker becomes `where 1 = 0`, and the CTAS builds an empty intermediate relation that publishes normally.
@@ -136,9 +137,10 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | Config | Required | Default | Rules |
 |--------|----------|---------|-------|
 | `materialized` | Yes | – | `bucketed_incremental` |
-| `bucket_key_column` | Yes | – | Bare identifier; a column of `bucket_source_table` |
+| `bucket_key_column` | Yes | – | Bare identifier; a column of the bucket relation |
 | `bucket_snapshot_column` | Yes | – | Bare identifier; non-null `DateTime64(9)`; different from `bucket_key_column` |
-| `bucket_source_table` | Yes | – | `database.table`, both bare identifiers; an existing table |
+| `bucket_ref` | One of the pair | – | List or tuple of one or two bare identifiers, matching `ref()`; resolves the bucket relation |
+| `bucket_source` | One of the pair | – | List or tuple of exactly two bare identifiers, matching `source()`; resolves the bucket relation |
 | `unique_key` | Yes | – | The single `bucket_key_column` |
 | `rows_per_bucket` | No | `100000` | Positive integer, minimum 1; booleans rejected; see D9 for scan tradeoff |
 | `on_concurrent_writes` | No | `error` | `warn`, `error` or `ignore` |
@@ -155,27 +157,36 @@ The profile needs `use_lw_deletes: true`. Without the opt-in the adapter resolve
 
 | Condition | Message |
 |-----------|---------|
-| `bucket_key_column` missing or not an identifier | `bucket_key_column is required and must be a bare column identifier (letters, digits, underscore)` |
-| `bucket_snapshot_column` missing or not an identifier | `bucket_snapshot_column is required and must be a bare column identifier (letters, digits, underscore)` |
+| `bucket_key_column` missing or not an identifier | `bucket_key_column is required and must be a bare column identifier (letters, digits, underscore), got "<value>"` |
+| `bucket_snapshot_column` missing or not an identifier | `bucket_snapshot_column is required and must be a bare column identifier (letters, digits, underscore), got "<value>"` |
 | Snapshot column equals bucket column | `bucket_snapshot_column must be a different column from bucket_key_column` |
-| `bucket_source_table` missing or not `database.table` | `bucket_source_table is required and must have the form "database.table" with bare identifiers (letters, digits, underscore)` |
+| Neither bucket relation key set | `set exactly one of bucket_ref or bucket_source, but neither was set` |
+| Both bucket relation keys set | `set exactly one of bucket_ref or bucket_source, but both were set (bucket_ref="<value>", bucket_source="<value>")` |
+| `bucket_ref` wrong shape | `bucket_ref must be a list or tuple of one or two bare identifiers (letters, digits, underscore) matching ref() arguments, got "<value>"` |
+| `bucket_source` wrong shape | `bucket_source must be a list or tuple of exactly two bare identifiers (letters, digits, underscore) matching source() arguments, got "<value>"` |
 | `unique_key` does not equal `bucket_key_column` | `unique_key must be the single bucket_key_column "<column>", otherwise versions of one row split across buckets` |
-| `rows_per_bucket` not a positive integer | `rows_per_bucket must be a positive integer` |
-| `on_concurrent_writes` outside the enum | `on_concurrent_writes must be one of "warn", "error", "ignore"` |
+| `rows_per_bucket` not a positive integer | `rows_per_bucket must be a positive integer (>= 1)` |
+| `on_concurrent_writes` outside the enum | `on_concurrent_writes must be one of "warn", "error", "ignore", got "<value>"` |
 | `inserts_only` true | `inserts_only is not supported; incremental runs always use delete+insert` |
-| Resolved strategy is not `delete_insert` | `only the delete_insert incremental strategy is supported, got "<strategy>"` |
+| Resolved strategy is not `delete_insert` | `only the delete_insert incremental strategy is supported, got "<strategy>". Set incremental_strategy="delete_insert"; it requires use_lw_deletes: true in the profile and a dbt user allowed to set allow_nondeterministic_mutations` |
 | Marker count is not one | `marker -- __BUCKET_PREDICATE__ must appear exactly once in the model SQL; found <n>` |
-| `bucket_source_table` not found | `bucket_source_table "<table>" not found for model "<model>"` |
-| `bucket_source_table` is not a table | `bucket_source_table "<table>" must be a table, got type "<type>"` |
-| Key column missing from the source | `bucket_key_column "<column>" not found in bucket_source_table "<table>"` |
+| Bucket relation not found | `<key> "<schema>.<identifier>" not found for model "<model>"` |
+| Bucket relation is not a table | `<key> "<schema>.<identifier>" must be a table, got type "<type>"` |
+| Key column missing from the relation | `bucket_key_column "<column>" not found in <key> "<schema>.<identifier>"` |
 | Unsupported key column type | `bucket_key_column "<column>" has unsupported type "<dtype>"; expected a non-null UUID, signed integer or unsigned integer column` |
-| Snapshot column missing from the source | `bucket_snapshot_column "<column>" not found in bucket_source_table "<table>"` |
+| Snapshot column missing from the relation | `bucket_snapshot_column "<column>" not found in <key> "<schema>.<identifier>"` |
 | Snapshot dtype is not `DateTime64(9)` | `bucket_snapshot_column "<column>" has unsupported type "<dtype>"; it must be a non-null DateTime64(9) column` |
-| Negative integer keys | `bucket_source_table "<table>" has <n> negative values in "<column>". Negative integer keys cannot be bucketed (the bucket maths uses modulo), so a full refresh would silently drop them` |
-| No usable snapshot maximum (defensive; unreachable for a non-null `DateTime64(9)` column) | `bucket_snapshot_column "<column>" has no usable maximum in bucket_source_table "<table>"` |
-| Concurrent write detected with `error` | `concurrent writes to bucket_source_table "<table>" detected during the rebuild (snapshot bound <S0> exceeded). Re-run against a quiesced source; the previous table was left untouched` |
+| Negative integer keys | `<key> "<schema>.<identifier>" has <n> negative values in "<column>". Negative integer keys cannot be bucketed (the bucket maths uses modulo), so a full refresh would silently drop them` |
+| No usable snapshot maximum (defensive; unreachable for a non-null `DateTime64(9)` column) | `bucket_snapshot_column "<column>" has no usable maximum in <key> "<schema>.<identifier>"` |
+| Concurrent write detected with `error` | `concurrent writes to <key> "<schema>.<identifier>" detected during the rebuild (snapshot bound <S0> exceeded). Re-run against a quiesced source; the previous table was left untouched` |
+| Concurrent write detected with `warn` (log) | `WARNING: concurrent writes to <key> "<schema>.<identifier>" detected during the rebuild; run an incremental afterwards to converge` |
 
-Every message carries the `bucketed_incremental:` prefix.
+Every message carries the `bucketed_incremental:` prefix and ends with a
+period; the table omits the trailing period. In the table, `<key>` is
+`bucket_ref` or `bucket_source`, and `<schema>.<identifier>` is the resolved
+bucket relation (ClickHouse keeps `database` empty). Resolution failures
+(unknown model, unknown package, undeclared source) surface as dbt's own
+error and are not listed here.
 
 ## Design decisions
 
@@ -189,11 +200,11 @@ Every message carries the `bucketed_incremental:` prefix.
 
 ### D2: Size buckets by counting the source
 
-**Decision.** Run one count query against `bucket_source_table` and compute `ceil(row_count / rows_per_bucket)`.
+**Decision.** Run one count query against the bucket relation and compute `ceil(row_count / rows_per_bucket)`.
 
 **Rationale.** A fixed bucket count mis-sizes after growth: too few buckets keep statements large, too many add scans. Counting costs one cheap query compared with the build.
 
-**Consequences.** The count table must stay in sync with the table the model reads, or buckets end up uneven or empty. Each bucket re-reads the source, so a rebuild costs about one source scan per bucket.
+**Consequences.** The bucket relation must stay in sync with the relation the model reads, or buckets end up uneven or empty. Each bucket re-reads the relation, so a rebuild costs about one source scan per bucket.
 
 ### D3: Validate strictly and early
 
@@ -245,19 +256,27 @@ Every message carries the `bucketed_incremental:` prefix.
 
 ### D9: Accept one source scan per bucket
 
-**Decision.** Each bucket re-reads `bucket_source_table`.
+**Decision.** Each bucket re-reads the bucket relation.
 
 **Rationale.** Materializing the source once defeats the purpose of a bounded-memory rebuild; a view or staging table merely moves the cost. Repeated bounded scans let ClickHouse prune and stream each pass.
 
-**Consequences.** A rebuild reads the source about `N` times. The modulo predicate is non-sargable against `ORDER BY`, so each pass is effectively a full scan (the snapshot bound prunes only when the source is ordered or partitioned by snapshot). Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
+**Consequences.** A rebuild reads the relation about `N` times. The modulo predicate is non-sargable against `ORDER BY`, so each pass is effectively a full scan (the snapshot bound prunes only when the source is ordered or partitioned by snapshot). Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
 
 ### D10: Infer the key type from the source column
 
-**Decision.** The macro reads the key column dtype from `bucket_source_table` during the probe and sets an internal key type: `UUID` buckets by `reinterpretAsUInt64`, signed and unsigned integers bucket by value. Models declare only `bucket_key_column`.
+**Decision.** The macro reads the key column dtype from the bucket relation during the probe and sets an internal key type: `UUID` buckets by `reinterpretAsUInt64`, signed and unsigned integers bucket by value. Models declare only `bucket_key_column`.
 
 **Rationale.** The probe already reads the source columns to confirm the key exists, so the dtype is available at no extra cost. Deriving behavior from it leaves one source of truth, with no way for a model to contradict the source it points at.
 
 **Consequences.** Three key families need three bucket expressions, chosen in one place. An unsupported key type stops the run during the probe, before any bucket work. Supporting a new key family means extending the inference, not adding model-facing config.
+
+### D11: Resolve the bucket relation through `ref()` / `source()`
+
+**Decision.** Replace the `database.table` string with `bucket_ref` and `bucket_source`, exactly one per model, resolved through dbt's `ref()`/`source()`. The macro counts, probes and detects against the returned Relation object.
+
+**Rationale.** dbt resolves the schema, quoting and package identity, so the macro never splits a string or assumes schema equals database, and it sees the same manifest object the model body uses. Two keys are needed because a two-element `ref(package, model)` is indistinguishable from `source(source, table)` by length alone.
+
+**Consequences.** Config shape is validated before any database work; resolution failures surface as dbt's own error. A `ref()`/`source()` call inside the materialization adds no DAG edge, so the model body must contain the matching call or the bucket relation may build late. Versioned refs stay out of reach: `ref()` takes `version` as a keyword argument and the list has no slot for it.
 
 ## Alternatives considered
 
@@ -278,7 +297,7 @@ The integration harness runs ClickHouse 26.3.33.24 as a local server managed by 
 
 | Layer | Scope | Examples |
 |-------|-------|---------|
-| Compile-level | Config validation, marker checks | Every error in [Error reference](#error-reference) |
+| Compile-level | Config validation, marker checks | Every error in [Error reference](#error-reference), including `bucket_ref`/`bucket_source` exclusivity and shape |
 | Integration | Bucket builds, dtypes, empty source, publish | Target contents; `EXCHANGE TABLES` in `system.query_log` |
 | Contract | Snapshot bound, detection modes | `<=` bounds on every bucket query; mid-build writer test |
 | Incremental | Delete+insert, schema change, watermark tie | Only touched keys replaced; a row stamped `S0` recaptured |
@@ -297,5 +316,5 @@ The integration harness runs ClickHouse 26.3.33.24 as a local server managed by 
 - `docs/bucketed_incremental/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
 - `docs/bucketed_incremental/integration-test-plan.md`: suite scope, fixture layout and test matrix.
 - `docs/bucketed_incremental/integration-test-implementation.md`: implemented harness, findings and coverage.
-- Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.2).
+- Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.3).
 - Adapter strategy resolution and validation: `vendor/dbt-clickhouse/dbt/adapters/clickhouse/impl.py`.

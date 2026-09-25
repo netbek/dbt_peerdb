@@ -25,13 +25,13 @@ An own updated-at column on a non-PeerDB source is stamped upstream, so the macr
 ## What the macro does (by section)
 
 - **Validation**, before any database work and on every run type:
-  - `bucket_key_column`, `bucket_snapshot_column` and each part of `bucket_source_table` must be bare identifiers (letters, digits, underscore); the source must be exactly `database.table`.
+  - `bucket_key_column`, `bucket_snapshot_column` and each element of `bucket_ref` or `bucket_source` must be bare identifiers (letters, digits, underscore); exactly one of the two relation keys must be set.
   - `bucket_snapshot_column` must differ from `bucket_key_column`.
   - `unique_key` must be the single `bucket_key_column`.
   - `rows_per_bucket` must be a positive integer (`true` is rejected).
   - `on_concurrent_writes` must be one of `warn`, `error`, `ignore`.
   - `inserts_only` is rejected, the resolved strategy must be `delete_insert`, and `adapter.validate_incremental_strategy` is called unconditionally.
-- **Full refresh**: the source must exist and be a table. The key column type is inferred from the source: `UUID`, a signed `Int*` or an unsigned `UInt*`; `Nullable`/wrapped types are rejected. The snapshot column must match `DateTime64(9)` with an optional timezone. The count query returns `count()`, the negative-key count for integer keys, and `toString(max(snapshot))` in one statement. Bucket `i` runs `where key % N = i and snapshot <= S0`; the first bucket is the CTAS that creates the intermediate relation, the rest insert into it.
+- **Full refresh**: the resolved bucket relation must exist and be a table. The key column type is inferred from the source: `UUID`, a signed `Int*` or an unsigned `UInt*`; `Nullable`/wrapped types are rejected. The snapshot column must match `DateTime64(9)` with an optional timezone. The count query returns `count()`, the negative-key count for integer keys, and `toString(max(snapshot))` in one statement. Bucket `i` runs `where key % N = i and snapshot <= S0`; the first bucket is the CTAS that creates the intermediate relation, the rest insert into it.
 - **Detection** (skip with `ignore`): `select max(snapshot) > S0` — catches only a raised maximum, not truncates or deletes that lower the source without raising it. `error` raises before the publish swap; `warn` logs.
 - **Publish**: plain rename on the first run, `EXCHANGE TABLES` when the existing table reports `can_exchange`, two renames otherwise. A failed build leaves the target untouched.
 
