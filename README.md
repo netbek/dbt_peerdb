@@ -50,13 +50,18 @@ Details: [purpose and requirements](docs/bucketed_incremental/spec.md), [design]
 What your model must do:
 
 - Set `bucket_key_column` to the key column: a single bare identifier that
-  exists in `bucket_source_table`, and the same column as `unique_key`, so
+  exists in the bucket relation, and the same column as `unique_key`, so
   every version of one row always lands in the same bucket. The repetition
   is intentional: a mismatch fails the run instead of silently corrupting
   the table.
-- Set `bucket_source_table` to the `database.table` the model reads. The
-  materialization counts it, probes its column types, and bounds every
-  bucket by its snapshot maximum, so keep it in sync with the model.
+- Set exactly one of `bucket_ref` or `bucket_source` to the relation the
+  model reads. `bucket_ref` passes one or two identifiers to `ref()`;
+  `bucket_source` passes two to `source()` (for example
+  `bucket_source=["my_database", "my_table"]`). The materialization resolves
+  that relation, counts it, probes its column types, and bounds every bucket
+  by its snapshot maximum, so keep it in sync with the model. Write the
+  matching `{{ ref(...) }}` or `{{ source(...) }}` call in the model body:
+  dbt builds the DAG edge from the model body, not from the materialization.
 - Set `bucket_snapshot_column` to a non-null `DateTime64(9)` column of the
   source (e.g. `_peerdb_synced_at`), different from the key column. The
   materialization captures its maximum before building and reads only rows
@@ -84,7 +89,7 @@ Example model:
     unique_key="id",
     order_by="id",
     bucket_key_column="id",
-    bucket_source_table="my_database.my_table",
+    bucket_source=["my_database", "my_table"],
     bucket_snapshot_column="_peerdb_synced_at",
     rows_per_bucket=2000000
 ) }}

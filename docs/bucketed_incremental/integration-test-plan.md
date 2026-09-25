@@ -55,9 +55,9 @@ Standard source schema (shared by all models): `id <key_type>`, `payload String`
 
 ## Fixture project
 
-`models/sources.yml`: `sources: [{name: bi, schema: default, tables: [{name: bi_source}]}]`. Every model reads `{{ source('bi', 'bi_source') }}` and sets `bucket_source_table="default.bi_source"`, so one source name covers all scenarios (tests shape `default.bi_source` per case).
+`models/sources.yml`: `sources: [{name: bi, schema: default, tables: [{name: bi_source}]}]`. Most models read `{{ source('bi', 'bi_source') }}` and set `bucket_source=['bi', 'bi_source']`, so one source name covers those scenarios (tests shape `default.bi_source` per case). A ref-branch fixture reads a plain upstream model through `{{ ref(...) }}` and sets `bucket_ref`, in one single-element and one package-qualified two-element form.
 
-`macros/bi_model.sql` holds the shared body (README model shape): `dbt_peerdb.is_incremental()` branches (package-qualified, because a plain `is_incremental()` resolves to the adapter/global macro, which does not recognise `bucketed_incremental`), `>=` watermark by default, `order by _peerdb_version desc, _peerdb_synced_at desc limit 1 by id`, and the single `-- __BUCKET_PREDICATE__` marker in the full branch. Parameters: `watermark_operator` (`>=`/`>`), `sleep_seconds` (adds `and sleepEachRow(n) = 0` plus `settings max_threads=1` to the full branch only), `include_marker`.
+`macros/bi_model.sql` holds the shared body (README model shape): `dbt_peerdb.is_incremental()` branches (package-qualified, because a plain `is_incremental()` resolves to the adapter/global macro, which does not recognise `bucketed_incremental`), `>=` watermark by default, `order by _peerdb_version desc, _peerdb_synced_at desc limit 1 by id`, and the single `-- __BUCKET_PREDICATE__` marker in the full branch. The body takes the relation as an argument and defaults to `{{ source('bi', 'bi_source') }}`; ref models pass `{{ ref(...) }}`, so the ref() call lives in the model body where dbt registers the DAG edge. Parameters: `watermark_operator` (`>=`/`>`), `sleep_seconds` (adds `and sleepEachRow(n) = 0` plus `settings max_threads=1` to the full branch only), `include_marker`, `relation`.
 
 Behavioral models (configs explicit in each file):
 
@@ -75,7 +75,7 @@ Behavioral models (configs explicit in each file):
 | `bi_unique_key_list` | `unique_key=['id']` | list form accepted |
 | `bi_hooks` | `pre_hook` and `post_hook` inserts | hooks run around the build |
 
-Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model()` or a marker + `select` when the marker itself is the subject): `bi_bucket_key_missing`, `bi_bucket_key_invalid`, `bi_snapshot_missing`, `bi_snapshot_invalid`, `bi_snapshot_equals_key`, `bi_source_missing_config`, `bi_source_invalid_config`, `bi_unique_key_missing`, `bi_unique_key_mismatch`, `bi_rows_bool`, `bi_rows_zero`, `bi_rows_float`, `bi_on_concurrent_invalid`, `bi_inserts_only`, `bi_strategy_append`, `bi_strategy_legacy`, `bi_bad_hook` (bad `rows_per_bucket` + pre-hook sentinel), `bi_no_marker`, `bi_two_markers`.
+Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model()` or a marker + `select` when the marker itself is the subject): `bi_bucket_key_missing`, `bi_bucket_key_invalid`, `bi_snapshot_missing`, `bi_snapshot_invalid`, `bi_snapshot_equals_key`, `bi_relation_missing_config` (neither key), `bi_relation_invalid_config` (wrong shape), `bi_relation_both_config` (both keys), `bi_unique_key_missing`, `bi_unique_key_mismatch`, `bi_rows_bool`, `bi_rows_zero`, `bi_rows_float`, `bi_on_concurrent_invalid`, `bi_inserts_only`, `bi_strategy_append`, `bi_strategy_legacy`, `bi_bad_hook` (bad `rows_per_bucket` + pre-hook sentinel), `bi_no_marker`, `bi_two_markers`.
 
 ## Test matrix
 
@@ -86,13 +86,14 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 | config errors | run each bad model | failure + exact message; no `__dbt_tmp` query in `query_log` |
 | validation before hooks | `bi_bad_hook` | sentinel table absent |
 | rows bool/zero/float | three models | `rows_per_bucket must be a positive integer` |
-| identifier missing/invalid | key, snapshot, source models | `is required and must be a bare...` / `must have the form "database.table"` |
+| identifier missing/invalid | key and snapshot models | `is required and must be a bare...` |
+| relation key set | neither/both/wrong-shape models | `set exactly one of bucket_ref or bucket_source...` / `must be a list or tuple of ...` |
 | snapshot == key, unique key missing/mismatch | models | respective messages |
 | `on_concurrent_writes`, `inserts_only`, strategy append/legacy | models | respective messages, strategy name included |
 | marker missing/duplicated | `bi_no_marker`, `bi_two_markers` | `-- __BUCKET_PREDICATE__ must appear exactly once ... found 0/2` |
 | source not found | drop `bi_source` | `not found for model "bi_basic"` |
 | source not a table | create view `bi_source` | `must be a table, got type "view"` |
-| key column missing / unsupported type (String, `Nullable(UUID)`) | custom source schemas | `not found in bucket_source_table` / `unsupported type "..."; expected a non-null UUID, signed integer or unsigned integer` |
+| key column missing / unsupported type (String, `Nullable(UUID)`) | custom source schemas | `not found in bucket_source` / `unsupported type "..."; expected a non-null UUID, signed integer or unsigned integer` |
 | snapshot column missing / `DateTime64(3)` / `DateTime` / `Nullable(DateTime64(9))` | custom source schemas | `must be a non-null DateTime64(9) column` |
 | negative keys | `Int64` source with one negative id | `has 1 negative values` |
 
@@ -111,6 +112,9 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 | key types | parametrize all `UInt8..256`, `Int8..256` | success, target holds all ids, bucket query uses bare `id %` |
 | UUID key | `UUID` source | success, all rows, `reinterpretAsUInt64(id) %` in bucket query |
 | snapshot timezone | `DateTime64(9, 'UTC')` | success; bound literal ends `, 9, 'UTC')` |
+| ref branch build | `bi_ref` (1-element) and `bi_ref_package` (2-element) against an upstream table | success; target contents; count and detection queries render the ref relation |
+| list and tuple shapes | `bi_ref_tuple`, `bi_source_tuple` | success; target contents |
+| ref branch relation contract | ref fixture with missing / view / column-poor upstream | messages name `bucket_ref` and the ref relation |
 | incremental detection | first run vs second run vs `--full-refresh` | first/second run log + `query_log` show full branch (`row_count=`) vs incremental branch (`__dbt_new_data_`) vs full branch again |
 
 ### `test_bucketed_incremental_publish.py`

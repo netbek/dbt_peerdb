@@ -6,8 +6,7 @@
     unique_key='id',
     bucket_key_column='id',
     bucket_snapshot_column='_peerdb_synced_at',
-    bucket_source=['bi', 'bi_source'],
-    rows_per_bucket=1000,
-    on_concurrent_writes='warn',
+    bucket_source=['bi'],
+    rows_per_bucket=3,
 ) }}
-{{ bi_model_sql(sleep_seconds=0.5) }}
+select 1 as id

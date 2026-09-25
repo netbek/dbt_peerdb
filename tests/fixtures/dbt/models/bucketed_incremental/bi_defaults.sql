@@ -6,6 +6,6 @@
     unique_key='id',
     bucket_key_column='id',
     bucket_snapshot_column='_peerdb_synced_at',
-    bucket_source_table='default.bi_source',
+    bucket_source=['bi', 'bi_source'],
 ) }}
 {{ bi_model_sql() }}

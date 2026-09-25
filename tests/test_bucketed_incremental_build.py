@@ -337,3 +337,63 @@ class TestFullRefresh(BucketedIncrementalTest):
             "(region)",
         )
         assert query_scalar(clickhouse_client, "select count() from default.bi_partitioned") == 10
+
+    def test_ref_branch_builds_and_renders_relation(self, dbt: Dbt, clickhouse_client: Client):
+        """bucket_ref resolves through ref(); the count and detection queries read the ref target,
+        and the upstream model builds first through the DAG edge in the model body."""
+        self.create_standard_source(clickhouse_client, base_rows())
+
+        run = self.run_model(dbt, "+bi_ref", clickhouse_client)
+
+        assert run.success is True
+        assert run.events_matching(r"bucket_count=4")
+        assert (
+            fetch_rows(clickhouse_client, "select id, payload from default.bi_ref order by id")
+            == expected_base_rows()
+        )
+        assert run.queries_matching(r"count\(\) as row_count,.*from `default`\.`bi_ref_source`")
+        assert run.queries_matching(r"as writes_detected from `default`\.`bi_ref_source`")
+
+    def test_package_qualified_ref_branch_builds(self, dbt: Dbt, clickhouse_client: Client):
+        """A two-element bucket_ref resolves ref(package, model)."""
+        self.create_standard_source(clickhouse_client, base_rows())
+
+        run = self.run_model(dbt, "+bi_ref_package", clickhouse_client)
+
+        assert run.success is True
+        assert (
+            fetch_rows(
+                clickhouse_client, "select id, payload from default.bi_ref_package order by id"
+            )
+            == expected_base_rows()
+        )
+        assert run.queries_matching(r"as writes_detected from `default`\.`bi_ref_source`")
+
+    def test_ref_tuple_branch_builds(self, dbt: Dbt, clickhouse_client: Client):
+        """A two-element tuple bucket_ref is accepted like a list."""
+        self.create_standard_source(clickhouse_client, base_rows())
+
+        run = self.run_model(dbt, "+bi_ref_tuple", clickhouse_client)
+
+        assert run.success is True
+        assert (
+            fetch_rows(
+                clickhouse_client, "select id, payload from default.bi_ref_tuple order by id"
+            )
+            == expected_base_rows()
+        )
+        assert run.queries_matching(r"as writes_detected from `default`\.`bi_ref_source`")
+
+    def test_source_tuple_branch_builds(self, dbt: Dbt, clickhouse_client: Client):
+        """A tuple bucket_source is accepted like a list."""
+        self.create_standard_source(clickhouse_client, base_rows())
+
+        run = self.run_model(dbt, "bi_source_tuple", clickhouse_client)
+
+        assert run.success is True
+        assert (
+            fetch_rows(
+                clickhouse_client, "select id, payload from default.bi_source_tuple order by id"
+            )
+            == expected_base_rows()
+        )
