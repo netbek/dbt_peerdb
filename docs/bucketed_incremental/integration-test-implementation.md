@@ -140,7 +140,7 @@ error as defensive, so no contract claims testability for it.
 
 ### Verification
 
-- `export TZ=Africa/Johannesburg`, start ClickHouse 26.3.33.24 via clickhousectl,
+- Start ClickHouse 26.3.33.24 via clickhousectl,
   `.venv/bin/pytest` from the repo root: 73 passed.
 - `ruff-check --hook-stage manual --all-files` and `ruff-format` pass.
 - `pre-commit run --all-files` cannot install `yamlfmt` in this sandbox (no

@@ -156,7 +156,6 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 ## Verification
 
 ```shell
-export TZ=Africa/Johannesburg
 .venv/bin/clickhousectl local server start --version 26.3.33.24 --http-port 18123 --tcp-port 19000
 .venv/bin/pytest -s tests/test_bucketed_incremental_validation.py
 .venv/bin/pytest -s

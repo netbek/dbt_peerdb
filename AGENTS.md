@@ -14,12 +14,6 @@ Load any skill below with the `skill` tool by name (e.g., `skill find-skills`), 
 
 ## ClickHouse
 
-Set `TZ` once per shell session:
-
-```shell
-export TZ=Africa/Johannesburg
-```
-
 Create ClickHouse config once per shell session:
 
 ```shell
@@ -47,8 +41,6 @@ Always use ClickHouse v26.3.33.24 with HTTP port `18123` and TCP port `19000`.
 Use `.venv/bin/pytest`. Integration tests require a running ClickHouse server (see above). Example session:
 
 ```shell
-export TZ=Africa/Johannesburg
-
 mkdir -p ~/.clickhouse/configs
 cat > ~/.clickhouse/configs/dbt_peerdb.yaml <<'EOF'
 query_log:
