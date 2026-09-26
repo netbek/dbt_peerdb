@@ -11,6 +11,7 @@ Load any skill below with the `skill` tool by name (e.g., `skill find-skills`), 
 | `fetching-dbt-docs` | `.agents/skills/fetching-dbt-docs` | Retrieves and searches dbt documentation pages in LLM-friendly markdown format. Use when fetching dbt documentation, looking up dbt features, or answering questions about dbt Cloud, dbt Core, or the dbt Semantic Layer. |
 | `find-skills` | `.agents/skills/find-skills` | Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill. |
 | `using-dbt-for-analytics-engineering` | `.agents/skills/using-dbt-for-analytics-engineering` | Builds and modifies dbt models, writes SQL transformations using ref() and source(), creates tests, and validates results with dbt show. Use when doing any dbt work - building or modifying models, debugging errors, exploring unfamiliar data sources, writing tests, or evaluating impact of changes. |
+| `writing-spec-and-design-docs` | `.agents/skills/writing-spec-and-design-docs` | Write or revise a feature spec and design doc before implementation. Use when the user asks for a spec, design doc, feature plan, or says "spec this", "design this", or "write the plan docs". |
 
 ## ClickHouse
 
