@@ -23,9 +23,9 @@ die() {
 
 [ $# -eq 0 ] || die "takes no arguments (version comes from pyproject.toml)"
 
-command -v gh >/dev/null 2>&1 || die "gh not found"
-
 cd "${ROOT_DIR}"
+
+command -v gh >/dev/null 2>&1 || die "gh not found"
 
 [ -z "$(git status --porcelain)" ] || die "uncommitted changes, commit or stash first"
 
