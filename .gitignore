@@ -4,7 +4,7 @@ __pycache__
 .ruff_cache
 .venv
 node_modules
-vendor
+vendor/python
 
 # Generated state
 skills-lock.json

@@ -1,0 +1,13 @@
+[submodule "vendor/dbt"]
+	path = vendor/dbt
+	url = https://github.com/dbt-labs/dbt-core
+[submodule "vendor/dbt-adapters"]
+	path = vendor/dbt-adapters
+	url = https://github.com/dbt-labs/dbt-adapters
+	branch = main
+[submodule "vendor/dbt-clickhouse"]
+	path = vendor/dbt-clickhouse
+	url = https://github.com/ClickHouse/dbt-clickhouse
+[submodule "vendor/peerdb"]
+	path = vendor/peerdb
+	url = https://github.com/PeerDB-io/peerdb
