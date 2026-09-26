@@ -183,12 +183,6 @@ columns name data, watermarks are thresholds derived from the snapshot column.
     git clone --recurse-submodules git@github.com:netbek/dbt_peerdb.git
     ```
 
-    For an existing clone without submodules:
-
-    ```shell
-    git submodule update --init --recursive
-    ```
-
 2. Install Mise and add activation to `~/.bashrc`, e.g.
 
     ```shell
