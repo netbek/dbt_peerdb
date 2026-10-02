@@ -45,7 +45,7 @@ from the source (non-null UUID, signed or unsigned integers) and
 `unique_key` must be that same single column.
 
 Based on the [dbt-clickhouse `incremental` materialization](https://github.com/ClickHouse/dbt-clickhouse/blob/v1.10.3/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql).
-Details: [purpose and requirements](docs/bucketed_incremental/spec.md), [design](docs/bucketed_incremental/design.md).
+Details: [purpose and requirements](docs/plans/bucketed-incremental/spec.md), [design](docs/plans/bucketed-incremental/design.md).
 
 What your model must do:
 
@@ -70,10 +70,14 @@ What your model must do:
 - Set `rows_per_bucket` (default 100000, minimum 1, a positive whole number) to size
   the buckets: the bucket count is the source row count divided by this
   number, rounded up. Lower it if a single bucket exhausts memory.
-  Each bucket filters on `key % N = i`, which cannot use the source's sparse
-  primary-key index, so every bucket scans the source — lowering the value
-  lowers peak memory but raises total scan cost (about one source scan per
-  bucket per rebuild).
+  Integer keys filter each bucket on `key % N = i`, which cannot use the
+  source's sparse primary-key index, so every bucket scans the source.
+  UUID keys filter each bucket on a contiguous key range instead, which uses
+  the primary-key index when the source is sorted by the key, so keep UUID
+  sources `ORDER BY` the key. Range widths assume keys spread across the
+  range; a clustered distribution can make some buckets larger than
+  `rows_per_bucket`. Either way, lowering the value lowers peak memory but
+  raises total scan cost.
 - Call `dbt_peerdb.is_incremental()` to detect incremental runs, as in the
   example. dbt resolves a plain `is_incremental()` from the root project or
   the adapter's global macros, which do not recognise `bucketed_incremental`,
@@ -170,7 +174,7 @@ Which watermark do you have?
   run, and keep `on_concurrent_writes="error"` (the default).
 
 Terms used here — snapshot column, `S0`, `W`, high watermark, marker —
-are defined once in [Terminology](docs/bucketed_incremental/design.md#terminology):
+are defined once in [Terminology](docs/plans/bucketed-incremental/design.md#terminology):
 columns name data, watermarks are thresholds derived from the snapshot column.
 
 ## Development

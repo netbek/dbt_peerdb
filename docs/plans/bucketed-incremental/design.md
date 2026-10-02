@@ -1,10 +1,14 @@
 # bucketed_incremental Design
 
+> Status: v1 · last updated 2026-10-02
+
 ## Context
 
 The warehouse mirrors operational tables into ClickHouse with PeerDB, then dedupes them in staging models by key. Some of those tables hold hundreds of millions of rows. A full refresh that runs as one `create table ... as select` can exhaust memory, monopolize the server for hours and fail late, after most of the work is done. Upstream `dbt-clickhouse` offers a single-CTAS full refresh and several incremental strategies; neither fits a source under continuous change.
 
-ClickHouse gives each query a consistent snapshot but no snapshot that spans separate statements. A rebuild split into many statements therefore reads a different source state in each one. Without a guard, a row written after its bucket has been read never appears in the target, and no later incremental run selects it. `docs/bucketed_incremental/concurrent-writes-data-loss.md` records the analysis and the decision: pin every bucket to a captured snapshot bound, detect writes that land mid-build, and document the tie-safe watermark that lets the next incremental run recover them.
+ClickHouse gives each query a consistent snapshot but no snapshot that spans separate statements. A rebuild split into many statements therefore reads a different source state in each one. Without a guard, a row written after its bucket has been read never appears in the target, and no later incremental run selects it. `docs/plans/bucketed-incremental/concurrent-writes-data-loss.md` records the analysis and the decision: pin every bucket to a captured snapshot bound, detect writes that land mid-build, and document the tie-safe watermark that lets the next incremental run recover them.
+
+UUID keys need one more consideration. The original modulo partition, `reinterpretAsUInt64(key) % N`, is not sargable, so every bucket scans the source. ClickHouse defines `using UUID = StrongTypedef<UInt128, UUIDTag>`, so UUID comparison is exactly `UInt128` comparison and a range predicate on the key is sargable against a table ordered by it. The internal `UInt128` swaps the canonical halves, which decides how each UUID version is distributed in ClickHouse key order; see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor). When the key is a UUID, the model contract is that the bucket relation is `PRIMARY KEY id ORDER BY id`; the materialization does not verify the sorting key.
 
 ## Goals
 
@@ -13,6 +17,8 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 3. Keep concurrent writes to append-only sources from being lost silently.
 4. Keep incremental runs on the adapter's tested delete+insert path.
 5. Stop with a clear error when the configuration cannot satisfy the design.
+6. Let each UUID bucket pass read only its key range through the source's primary-key index.
+7. Keep the bucket-sizing promise (`rows_per_bucket`) meaningful for evenly spread keys.
 
 ## Non-goals
 
@@ -21,6 +27,10 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 - Backdated writes. A row stamped below `S0` and landing after its bucket is not re-selected. Rare under PeerDB (shard skew, step-back, manual writes); routine for source-stamped own updated-at columns, which must quiesce for rebuilds.
 - Distributed tables and the `insert_overwrite`, `microbatch`, `append` and `legacy` strategies.
 - Enforcing the model's watermark predicate. The materialization cannot inspect it.
+- Exactly equal row counts per bucket (quantiles, sampling).
+- Enforcing or probing the source sorting key.
+- A config flag choosing between range and modulo.
+- Range bucketing for integer keys.
 
 ## Terminology
 
@@ -32,6 +42,15 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 | Bucket relation | The relation the set config resolves to through `ref()` or `source()`; the macro counts, probes and detects against it |
 | `bucket_snapshot_column` | The snapshot column; names a column, not a threshold. A non-null `DateTime64(9)` column that orders writes, usually `_peerdb_synced_at`. Destination-stamped under PeerDB, source-stamped for own updated-at columns (see the provenance note in `concurrent-writes-data-loss.md`) |
 | Snapshot column | The role `bucket_snapshot_column` plays: the column whose maximum orders the build |
+| Key bounds | `m` and `M`: the least and greatest `reinterpretAsUInt128(bucket_key_column)` in the bucket relation, captured with the count |
+| Stats statement | The single statement that captures the row count `R`, the key bounds and the snapshot maximum `S0` for a full refresh |
+| Bucket count | `N = ceil(R / rows_per_bucket)` |
+| Step | `floor((M - m) / N)`, the width shared by most ranges |
+| Remainder | `rem = (M - m) - step * N`, the extra key values spread across the first ranges |
+| Boundary | `b_i = m + i * step + min(i, rem)` for `i` in `0..N`, with `b_N = M` |
+| Range | Bucket `i` covers `[b_i, b_{i+1})`, except the last bucket, which covers `[b_{N-1}, M]` |
+| Boundary query | The table-free statement over `numbers(N)` that turns the bounds, step and remainder into UUID text |
+| Range predicate | `key >= lower and key < upper` (last bucket: `key <= upper`), combined with the snapshot bound |
 | `S0` | The snapshot bound (a value): the maximum snapshot value captured before bucket 0 |
 | `W` | A watermark (a value): the maximum snapshot value in the published target, at most `S0` |
 | High watermark | The model's estimate of `W`, usually `max(_peerdb_synced_at)` over `{{ this }}`. Watermarks are thresholds derived from the snapshot column; `S0`, `W`, and the high watermark are three different numbers with `high watermark <= W <= S0` across a build |
@@ -43,7 +62,7 @@ ClickHouse gives each query a consistent snapshot but no snapshot that spans sep
 One materialization, two paths. The config validation and strategy checks run on both.
 
 ```
-first run or --full-refresh ──► count ──► bucket loop ──► detect ──► publish
+first run or --full-refresh ──► count ──► boundaries (uuid) ──► bucket loop ──► detect ──► publish
 existing table, normal run   ──► delete+insert ──► grants, docs, hooks, commit
 ```
 
@@ -53,9 +72,24 @@ existing table, normal run   ──► delete+insert ──► grants, docs, hoo
 2. **Validate.** Check every rule in the [Configuration reference](#configuration-reference). These checks read only config values, so they run before any database work; the probe-time errors in the [Error reference](#error-reference) surface at the steps below.
 3. **Prepare.** Drop leftover intermediate and backup relations, then run pre-hooks (outside and inside the transaction).
 4. **Probe the source.** Resolve the bucket relation from `bucket_ref` or `bucket_source` with `ref()`/`source()`, require a table, and read its columns with `adapter.get_columns_in_relation`. Infer the internal key type from the key dtype (`UUID`, signed `Int*`, unsigned `UInt*`; anything else stops the run) and check the snapshot dtype against `DateTime64(9)`.
-5. **Count.** One query returns `count()` as `row_count`, `countIf(bucket_key_column < 0)` for integer keys, and `toString(max(bucket_snapshot_column))` as `snapshot_max`.
-6. **Size.** `bucket_count = ceil(row_count / rows_per_bucket)`, at least 1 unless the source is empty. The macro logs row count, bucket count and `S0`.
-7. **Bucket loop.** For bucket `i`: replace the marker with `where <key expression> % <bucket_count> = <i> and <snapshot column> <= <S0 literal>`; the first bucket creates the intermediate relation with a CTAS, the rest insert into it with `clickhouse__insert_into`. The key expression is `reinterpretAsUInt64(bucket_key_column)` for `uuid` and the bare column otherwise.
+5. **Count.** One query returns `count()` as `row_count`, `countIf(bucket_key_column < 0)` for integer keys, `toString(reinterpretAsUInt128(min(bucket_key_column)))` and `max(...)` for UUID keys, and `toString(max(bucket_snapshot_column))` as `snapshot_max`.
+6. **Size.** `bucket_count = ceil(row_count / rows_per_bucket)`, at least 1 unless the source is empty. For UUID keys the macro also computes `step` and `remainder` in Jinja and runs one table-free boundary query:
+
+   ```sql
+   select
+       number as bucket,
+       toString(reinterpretAsUUID(
+           toUInt128('<m>') + toUInt128(number) * toUInt128('<step>') + least(toUInt128(number), toUInt128('<rem>'))
+       )) as lower_uuid,
+       toString(reinterpretAsUUID(
+           toUInt128('<m>') + toUInt128(number + 1) * toUInt128('<step>') + least(toUInt128(number + 1), toUInt128('<rem>'))
+       )) as upper_uuid
+   from numbers(<N>)
+   order by bucket
+   ```
+
+   The statement returns `N` rows of canonical UUID text in bucket order. Bounds, step and remainder are spliced as quoted decimal strings because ClickHouse reads a bare decimal literal above `UInt64` as Float64 and rounds it. The macro logs row count, bucket count, `S0` and, for UUID keys, the key bounds and step.
+7. **Bucket loop.** For bucket `i`: replace the marker with `where <key expression> % <bucket_count> = <i> and <snapshot column> <= <S0 literal>` for integer keys, or `where <key> >= toUUID('<lower>') and <key> < toUUID('<upper>') and <snapshot column> <= <S0 literal>` for UUID keys (the last bucket uses `<=` on the upper bound); the first bucket creates the intermediate relation with a CTAS, the rest insert into it with `clickhouse__insert_into`.
 8. **Detect.** Query `select max(bucket_snapshot_column) > <S0 literal> as writes_detected from <bucket relation>`. `error` stops before the publish step; `warn` logs; `ignore` skips the query.
 9. **Publish and finish.** Rename or exchange the intermediate relation into place, apply grants, persist docs, create indexes, run post-hooks, commit, drop the backup, run outside-transaction post-hooks.
 
@@ -131,6 +165,52 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | Physical row delete after its bucket | Stale row until the next full refresh; no version exists to re-select it | Quiesce the source for rebuilds |
 | Clock skew across shards or replicas | Backdated stamps widen the first case | Single-node deployment or quiesced rebuilds |
 | Write landing between the two incremental source scans on servers before 25.12 | A version can stay missed until the key changes again | Upgrade; the hazard is inherited from upstream |
+
+### UUID range edge cases
+
+| Case | Behavior |
+|------|----------|
+| Uniform random UUIDs | Range widths map to roughly equal row counts |
+| Clustered keys | Ranges stay contiguous and complete; some buckets exceed `rows_per_bucket` (D17) |
+| `step = 0`, distinct dense keys | Balanced widths of 0 or 1 keep at most one key per bucket |
+| `step = 0`, duplicate keys | All rows of one key share a bucket, as with modulo |
+| Single row or `R <= B` | One range `[m, M]` inclusive |
+| Empty source | Empty-build path; no boundary query |
+| Keys at zero or all-ones UUID | Ordinary bounds; no overflow because `b_N = M < 2^128` |
+| Bounds near 2^128 | Quoted decimal literals parse exactly; a bare literal is read as Float64 and rounded |
+| Rows stamped above `S0` | Excluded from every range by the snapshot bound |
+| Bounds inflated by rows above `S0` | No coverage impact; ranges still contain every row at or below `S0` |
+| Unordered source | Correct contents, no pruning |
+
+### Modulo vs range by UUID flavor
+
+ClickHouse stores a UUID as a `UInt128` with the canonical 64-bit halves swapped, so `ORDER BY key` sorts by the canonical low half first and the canonical high half second. The modulo operand, `reinterpretAsUInt64(key)`, copies the low 64 bits of that value, which is the canonical high half. Range splits the ClickHouse key order; modulo hashes the canonical high half. The swap inverts the usual intuition about UUID versions: v7 keeps its timestamp in the canonical high half, so a v7 table is ordered by the random `rand_b` in the low half; v1 and v6 keep the node and clock sequence in the low half, so their order is node blocks, then time.
+
+`R` is the row count, `B` is `rows_per_bucket` and `N = ceil(R / B)`. The table assumes a source sorted by the key, which the model contract requires.
+
+| UUID flavor | ClickHouse key order | Modulo rows read | Range rows read | Modulo peak rows/statement | Range peak rows/statement | Modulo balance | Range balance |
+|-------------|----------------------|------------------|-----------------|----------------------------|---------------------------|----------------|---------------|
+| v4, v5, v3 | random | `N * R` | `R` | `B` | `B` | even | even |
+| v7, random `rand_b` | random | `N * R` | `R` | `B` | `B` | even | even |
+| v7, monotonic `rand_b`, reseeded per millisecond | generation order within a millisecond, random across milliseconds | `N * R` | `R` | `B` | `B` | even | even |
+| v1, v6, single node | node and clock-sequence block, then time | `N * R` | `R` | up to `R`: a regular cadence leaves every row in one residue | up to `R`: a burst window lands in one range | unreliable | arrival-rate dependent |
+| Dense counter keys | counter order | `N * R` | `R` | `B` | up to `R`: a counter band is one burst | even | burst-dependent |
+| Clustered or low-entropy keys | clustered | `N * R` | `R` | `B` when the hashed bits vary, otherwise up to `R` | up to `R`: the hot range | flavor-dependent | skewed |
+
+An unsorted source removes the range advantage: both predicates read `N * R` rows and keep the same per-statement peaks, because range prunes nothing.
+
+Other differences:
+
+| Dimension | Modulo | Range |
+|-----------|--------|-------|
+| Sargable | never | when the sorting key leads with the key |
+| Cost per scanned row | `reinterpretAsUInt64` and `%` | two constant comparisons |
+| Extra statements | none | key bounds in the stats query and one table-free boundary query |
+| Key bits used | canonical high 64 only | the full 128-bit key order |
+| `rows_per_bucket` promise | exact when the hashed bits are random | only for evenly spread keys |
+| Worst memory case | time-based UUID with a regular cadence | clustered keys with a burst |
+
+The modulo fallback has no niche worth a code path. Random-key flavors stay balanced under range and read `R` rows instead of `N * R`; time-ordered flavors are where modulo is most likely to be degenerate; dense counter keys belong in an integer column, which already uses modulo.
 
 ## Configuration reference
 
@@ -238,13 +318,13 @@ error and are not listed here.
 
 **Consequences.** Rebuilds against live sources fail until the source quiets or the operator chooses `warn`. `warn` and `ignore` are explicit opt-outs. The check costs one `max()` scan.
 
-### D7: Bucket uuid keys through `reinterpretAsUInt64`
+### D7: Bucket uuid keys by contiguous range
 
-**Decision.** Use `reinterpretAsUInt64(bucket_key_column) % N = i` for `uuid` keys and `bucket_key_column % N = i` for integer keys.
+**Decision.** Use contiguous UUID ranges derived from the key minimum and maximum for `uuid` keys and `bucket_key_column % N = i` for integer keys.
 
-**Rationale.** ClickHouse has no modulo operator for `UUID`. Reinterpreting a UUID as an unsigned integer keeps the mapping stable and spreads keys.
+**Rationale.** ClickHouse has no modulo operator for `UUID`, and `reinterpretAsUInt64(...) % N` is not sargable, so every bucket scans the source. A UUID is a strong typedef of `UInt128`, so reinterpretation preserves order and a range predicate uses the source's primary-key index when the table is ordered by the key.
 
-**Consequences.** The mapping ignores the version and variant bits; distribution can be uneven for non-random UUIDs. Every version of a key still lands in one bucket.
+**Consequences.** Bucket row counts depend on the key distribution: clustered keys can produce buckets larger than `rows_per_bucket` (see D17 and [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor)). Existing UUID models keep the same output but emit different statements.
 
 ### D8: No resumability
 
@@ -260,15 +340,15 @@ error and are not listed here.
 
 **Rationale.** Materializing the source once defeats the purpose of a bounded-memory rebuild; a view or staging table merely moves the cost. Repeated bounded scans let ClickHouse prune and stream each pass.
 
-**Consequences.** A rebuild reads the relation about `N` times. The modulo predicate is non-sargable against `ORDER BY`, so each pass is effectively a full scan (the snapshot bound prunes only when the source is ordered or partitioned by snapshot). Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
+**Consequences.** A rebuild reads the relation about `N` times. The integer modulo predicate is non-sargable against `ORDER BY`, so each integer-keyed pass is effectively a full scan (the snapshot bound prunes only when the source is ordered or partitioned by snapshot). UUID range passes prune when the source is ordered by the key. Lowering `rows_per_bucket` lowers peak memory but raises total scan cost.
 
 ### D10: Infer the key type from the source column
 
-**Decision.** The macro reads the key column dtype from the bucket relation during the probe and sets an internal key type: `UUID` buckets by `reinterpretAsUInt64`, signed and unsigned integers bucket by value. Models declare only `bucket_key_column`.
+**Decision.** The macro reads the key column dtype from the bucket relation during the probe and sets an internal key type: `UUID` buckets by contiguous range, signed and unsigned integers bucket by modulo. Models declare only `bucket_key_column`.
 
 **Rationale.** The probe already reads the source columns to confirm the key exists, so the dtype is available at no extra cost. Deriving behavior from it leaves one source of truth, with no way for a model to contradict the source it points at.
 
-**Consequences.** Three key families need three bucket expressions, chosen in one place. An unsupported key type stops the run during the probe, before any bucket work. Supporting a new key family means extending the inference, not adding model-facing config.
+**Consequences.** Two key families need two bucket predicates (range for UUID, modulo for integers), chosen in one place. An unsupported key type stops the run during the probe, before any bucket work. Supporting a new key family means extending the inference, not adding model-facing config.
 
 ### D11: Resolve the bucket relation through `ref()` / `source()`
 
@@ -278,13 +358,69 @@ error and are not listed here.
 
 **Consequences.** Config shape is validated before any database work; resolution failures surface as dbt's own error. A `ref()`/`source()` call inside the materialization adds no DAG edge, so the model body must contain the matching call or the bucket relation may build late. Versioned refs stay out of reach: `ref()` takes `version` as a keyword argument and the list has no slot for it.
 
+### D12: Spread the boundary remainder across the first ranges
+
+**Decision.** Use `b_i = m + i*step + min(i, rem)` instead of the simpler `b_i = m + i*step` with the last range extended to `M`.
+
+**Rationale.** Plain floor division leaves the whole remainder in the last range and collapses to a single range when `step` is zero. The balanced form gives every range a width of `step` or `step + 1`; for dense, distinct keys with `step = 0` it still produces at most one key per bucket. The extra cost is one `least()` term per boundary.
+
+**Consequences.** Boundaries differ from the originally proposed query; tests assert balanced widths. For the target case (random UUIDs) both forms are equivalent because `rem << step`.
+
+### D13: Wrap the aggregate and return text
+
+**Decision.** The stats statement uses `toString(reinterpretAsUInt128(min(bucket_key_column)))` and `toString(reinterpretAsUInt128(max(bucket_key_column)))`.
+
+**Rationale.** Wrapping the aggregate computes min/max on the bare UUID column, avoiding a per-row cast and keeping any part-level min/max metadata applicable. Fetching text sidesteps agate type inference for 128-bit values, matching the existing `toString(max(bucket_snapshot_column))` pattern.
+
+**Consequences.** The stats statement is no longer metadata-only: `count()` alone can be answered from table metadata, while the bounds read the key column (or its min/max projection when ClickHouse has one). That is one column scan against `N` saved bucket scans.
+
+### D14: Compute boundaries once, splice quoted literals
+
+**Decision.** Compute `step` and `remainder` in Jinja from the decimal bounds, run the boundary query once, and splice `toUUID('<text>')` literals into each bucket predicate.
+
+**Rationale.** Python integers are exact, so no 128-bit float division. ClickHouse owns the `UInt128` to UUID text mapping (`reinterpretAsUUID`), so the macro never encodes the internal byte layout. Constant literals keep predicates readable, testable and sargable, and the boundary statement is table-free.
+
+**Consequences.** One extra trivial statement per UUID full refresh. Bounds, step and remainder are spliced as quoted decimal strings (`toUInt128('<value>')`): ClickHouse reads a bare decimal literal above `UInt64` as Float64 and rounds it, while string parsing is exact.
+
+### D15: Make the last range inclusive
+
+**Decision.** Interior predicates use `key < upper`; the last predicate uses `key <= upper`.
+
+**Rationale.** `b_N` equals the maximum key `M`, so a strict `<` would drop the maximum key. Only the last range needs the inclusive form.
+
+**Consequences.** The boundary query returns the same shape for every bucket; the loop special-cases only the comparison operator.
+
+### D16: Choose the strategy from the key dtype, not config
+
+**Decision.** UUID columns always use range bucketing; no flag selects the strategy.
+
+**Rationale.** The probe already infers the key type from the source, so the source dtype stays the single source of truth. Range wins on I/O for the contract's sorted source; the cases where modulo bounds per-statement memory better are unsorted or clustered sources that the contract excludes, or counter keys that belong in an integer column (see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor)). A flag would add surface and a way to misconfigure.
+
+**Consequences.** Existing UUID models change statement shape with no opt-out; output is unchanged. Integer keys are untouched.
+
+### D17: Document ordering and skew; do not detect
+
+**Decision.** The design records the source-ordering contract and the skew caveat; the macro neither probes the sorting key nor measures per-range row counts.
+
+**Rationale.** Probing the sorting key adds a query and changes no behavior; detecting skew needs another pass over the source, which is the cost this feature removes. Random UUIDs spread uniformly, and the model contract guarantees the ordering.
+
+**Consequences.** A clustered key distribution (v1/v6 and counter keys; v7 keys are random in ClickHouse order) can produce buckets larger than `rows_per_bucket`; this is the price of index locality and is stated in the spec and README.
+
 ## Alternatives considered
 
 | Alternative | Why rejected |
 |-------------|--------------|
 | Upstream single-CTAS full refresh | No bound on memory or statement time; a failure discards all work |
 | `row_number()` sharding | The window must sort the whole source in one statement, which is the memory problem again |
-| One bucket per partition or per key range | Sources have no partition key, and ranges need a distribution map |
+| One bucket per partition | Sources have no partition key |
+| Keep modulo for UUID | Not sargable (`N` full scans per rebuild) and unreliable for time-based UUIDs under a regular cadence; see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor) |
+| Plain floor-division boundaries | Last range absorbs the remainder; dense keys collapse into one range |
+| `quantilesExact` boundaries | Reads and sorts every key in one statement, the memory problem the materialization exists to avoid |
+| Approximate quantiles or sampling | Nondeterministic boundaries and no exact coverage guarantee |
+| Config flag for the strategy | Unnecessary surface; the source dtype is the single source of truth |
+| Format UUID text in Jinja | Encodes the internal `UInt128`/UUID mapping in the macro |
+| Probe `system.tables.sorting_key` | Adds a query and cannot change behavior |
+| Range bucketing for integers too | Out of scope; negative keys and type widths need their own design |
 | `insert_overwrite` by partition | Needs `partition_by`, which sources lack, and replaces whole partitions |
 | A materialized view for incremental maintenance | Moves complexity into DDL outside dbt's build graph and cannot backfill |
 | External chunked backfill (for example Dagster-driven) | Splits the model's write path across two systems and two config surfaces |
@@ -293,28 +429,36 @@ error and are not listed here.
 
 ## Test strategy
 
-The integration harness runs ClickHouse 26.3.33.24 as a local server managed by `clickhousectl` (HTTP `18123`, TCP `19000`) on the default Atomic database engine, which supports `EXCHANGE TABLES`; `scripts/install-clickhouse.sh` enables query logging. The pytest suite in `tests/` drives a fixture dbt project at `tests/fixtures/dbt` that includes this package by local path. Every scenario has its own model file: distinct `--vars` values invalidate dbt's partial-parse cache, so fixed per-model configs are cheaper than one parametrized model.
+The integration harness runs ClickHouse 26.3.33.24 as a local server managed by `clickhousectl` (HTTP `18123`, TCP `19000`) on the default Atomic database engine, which supports `EXCHANGE TABLES`; `scripts/install-clickhouse.sh` enables query logging. The pytest suite in `tests/` drives a fixture dbt project at `tests/fixtures/dbt` that includes this package by local path. Each config variation has its own model file: distinct `--vars` values invalidate dbt's partial-parse cache, so fixed per-model configs are cheaper than one parametrized model. Data-only scenarios reuse a model and reshape the source.
 
 | Layer | Scope | Examples |
 |-------|-------|---------|
 | Compile-level | Config validation, marker checks | Every error in [Error reference](#error-reference), including `bucket_ref`/`bucket_source` exclusivity and shape |
 | Integration | Bucket builds, dtypes, empty source, publish | Target contents; `EXCHANGE TABLES` in `system.query_log` |
 | Contract | Snapshot bound, detection modes | `<=` bounds on every bucket query; mid-build writer test |
+| UUID range | Predicate shapes, boundary maths, precision | `>=`/`<` interior and `<=` last; balanced remainder; zero step; bounds near `2^128` |
+| Pruning | Primary-key locality | UUID source `order by id` with several granules; per-statement `read_rows` stays far below `N` source scans |
 | Incremental | Delete+insert, schema change, watermark tie | Only touched keys replaced; a row stamped `S0` recaptured |
 
-`tests/helpers.py` captures both observable effects per run: the dbt events collected via `capture_events=True` and the statements in `system.query_log` since a server timestamp marker, read after `SYSTEM FLUSH LOGS` and filtered of the harness's own reads and the adapter's atomic-exchange probe. The concurrency tests slow the build with `sleepEachRow` (pinned to one thread), and `LateWriter` runs a background thread that polls `system.processes` for that query, then inserts a row stamped with `now64(9)`, so the write always lands between the count query and the detection query.
+`tests/helpers.py` captures both observable effects per run: the dbt events collected via `capture_events=True` and the statements in `system.query_log` since a server timestamp marker, read after `SYSTEM FLUSH LOGS` and filtered of the harness's own reads and the adapter's atomic-exchange probe. It also provides `create_source(order_by=...)`, `insert_generated_uuid_rows`, `clickhouse_uuid`/`clickhouse_uuid_value` (ClickHouse swaps the UUID's 64-bit halves) and per-statement `read_rows` via `ModelRun.insert_statements()`. The concurrency tests slow the build with `sleepEachRow` (pinned to one thread), and `LateWriter` runs a background thread that polls `system.processes` for that query, then inserts a row stamped with `now64(9)`, so the write always lands between the count query and the detection query.
 
 ## Open questions
 
 - Whether to move the validation rules into the adapter so other materializations can reuse them.
 - Whether a progress table under an orchestrator should own resumability.
 - Whether to support sources that physically delete rows through a periodic full refresh instead of a quiesce.
+- Whether a future revision should measure per-range row counts and warn on heavy skew; today the extra scan is not worth it.
+- Whether integer keys with a leading sort key should get the same range treatment.
 
 ## References
 
 - `README.md` in this package: user-facing description and model example.
-- `docs/bucketed_incremental/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
-- `docs/bucketed_incremental/integration-test-plan.md`: suite scope, fixture layout and test matrix.
-- `docs/bucketed_incremental/integration-test-implementation.md`: implemented harness, findings and coverage.
+- `docs/plans/bucketed-incremental/concurrent-writes-data-loss.md`: hazard analysis, worked example and decision record.
+- `docs/plans/bucketed-incremental/integration-test-plan.md`: suite scope, fixture layout and test matrix.
+- `docs/plans/bucketed-incremental/integration-test-implementation.md`: implemented harness, findings and coverage.
 - Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.3).
 - Adapter strategy resolution and validation: `vendor/dbt-clickhouse/dbt/adapters/clickhouse/impl.py`.
+- ClickHouse `base/base/UUID.h`: `using UUID = StrongTypedef<UInt128, UUIDTag>`.
+- ClickHouse `src/Functions/reinterpretAs.cpp`: `reinterpretAsUInt128` accepts UUID; `reinterpretAsUUID` returns UUID; `reinterpretAsUInt64` copies the low half of the internal `UInt128`.
+- `tests/helpers.py`: `clickhouse_uuid` and `clickhouse_uuid_value` encode the UUID halves swap.
+- ClickHouse `src/Storages/MergeTree/MergeTreeData.cpp`: implicit min/max count projection for primary-key columns.

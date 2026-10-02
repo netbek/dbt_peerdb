@@ -202,11 +202,6 @@
           ~ '"; expected a non-null UUID, signed integer or unsigned integer column.'
       ) }}
     {% endif %}
-    {% if bucket_key_type == 'uuid' %}
-      {% set bucket_lhs = 'reinterpretAsUInt64(' ~ bucket_key_column ~ ')' %}
-    {% else %}
-      {% set bucket_lhs = bucket_key_column %}
-    {% endif %}
     {% if ns.snapshot_dtype is none %}
       {{ exceptions.raise_compiler_error(
           'bucketed_incremental: bucket_snapshot_column "' ~ bucket_snapshot_column
@@ -243,7 +238,11 @@
       {% do count_select.append('countIf(' ~ bucket_key_column ~ ' < 0) as negative_key_count') %}
       {% set snapshot_idx = 2 %}
     {% else %}
-      {% set snapshot_idx = 1 %}
+      {% do count_select.append('toString(reinterpretAsUInt128(min(' ~ bucket_key_column ~ '))) as min_key') %}
+      {% do count_select.append('toString(reinterpretAsUInt128(max(' ~ bucket_key_column ~ '))) as max_key') %}
+      {% set min_idx = 1 %}
+      {% set max_idx = 2 %}
+      {% set snapshot_idx = 3 %}
     {% endif %}
     {% do count_select.append('toString(max(' ~ bucket_snapshot_column ~ ')) as snapshot_max') %}
     {% set count_sql %}select {{ count_select | join(', ') }} from {{ bucket_resolved_relation }}{% endset %}
@@ -280,13 +279,38 @@
       {% set snapshot_literal = "toDateTime64('" ~ snapshot_str ~ "', 9" ~ (", '" ~ snapshot_tz ~ "'" if snapshot_tz else "") ~ ")" %}
     {% endif %}
     {% set bucket_count = ((row_count + rows_per_bucket - 1) // rows_per_bucket) | int %}
+    {% set uuid_stats = '' %}
+    {% if bucket_key_type == 'uuid' and bucket_count >= 1 %}
+      {% set min_key = count_result.columns[min_idx].values()[0] | int %}
+      {% set max_key = count_result.columns[max_idx].values()[0] | int %}
+      {% set key_diff = max_key - min_key %}
+      {% set step = key_diff // bucket_count %}
+      {% set remainder = key_diff - step * bucket_count %}
+      {% set boundary_sql %}
+select
+    number as bucket,
+    toString(reinterpretAsUUID(
+        toUInt128('{{ min_key }}') + toUInt128(number) * toUInt128('{{ step }}') + least(toUInt128(number), toUInt128('{{ remainder }}'))
+    )) as lower_uuid,
+    toString(reinterpretAsUUID(
+        toUInt128('{{ min_key }}') + toUInt128(number + 1) * toUInt128('{{ step }}') + least(toUInt128(number + 1), toUInt128('{{ remainder }}'))
+    )) as upper_uuid
+from numbers({{ bucket_count }})
+order by bucket
+      {% endset %}
+      {% set boundary_result = run_query(boundary_sql) %}
+      {% set lower_bounds = boundary_result.columns[1].values() %}
+      {% set upper_bounds = boundary_result.columns[2].values() %}
+      {% set uuid_stats = ' min_key=' ~ min_key ~ ' max_key=' ~ max_key ~ ' step=' ~ step %}
+    {% endif %}
     {{ log(
         'bucketed_incremental: row_count='
         ~ row_count
         ~ ' bucket_count='
         ~ bucket_count
         ~ ' snapshot_max='
-        ~ (snapshot_str or 'n/a'),
+        ~ (snapshot_str or 'n/a')
+        ~ uuid_stats,
         info=True,
     ) }}
     {% if bucket_count < 1 %}
@@ -299,16 +323,34 @@
         {#- The marker is replaced verbatim with a where clause, so models must
             not supply their own WHERE before it; further full-refresh filters
             go after the marker joined with AND. -#}
-        {% set predicate = 'where '
-            ~ bucket_lhs
-            ~ ' % '
-            ~ bucket_count
-            ~ ' = '
-            ~ i
-            ~ ' and '
-            ~ bucket_snapshot_column
-            ~ ' <= '
-            ~ snapshot_literal %}
+        {% if bucket_key_type == 'uuid' %}
+          {% set upper_operator = '<=' if loop.last else '<' %}
+          {% set predicate = 'where '
+              ~ bucket_key_column
+              ~ " >= toUUID('"
+              ~ lower_bounds[i]
+              ~ "') and "
+              ~ bucket_key_column
+              ~ ' '
+              ~ upper_operator
+              ~ " toUUID('"
+              ~ upper_bounds[i]
+              ~ "') and "
+              ~ bucket_snapshot_column
+              ~ ' <= '
+              ~ snapshot_literal %}
+        {% else %}
+          {% set predicate = 'where '
+              ~ bucket_key_column
+              ~ ' % '
+              ~ bucket_count
+              ~ ' = '
+              ~ i
+              ~ ' and '
+              ~ bucket_snapshot_column
+              ~ ' <= '
+              ~ snapshot_literal %}
+        {% endif %}
         {% set bucket_sql = sql.replace(marker, predicate) %}
         {{ log(
             'bucketed_incremental: Processing bucket ' ~ (i + 1) ~ ' of ' ~ bucket_count, info=True

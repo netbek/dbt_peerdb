@@ -99,7 +99,7 @@ error as defensive, so no contract claims testability for it.
 | Task | File |
 |---|---|
 | Session-scoped `clickhouse_client` from `tests/conftest.py`, per-test cleanup that drops all relations (tables/views/dictionaries) and the `system.query_log` precondition check | `tests/helpers.py` |
-| `run_model(dbt, name, clickhouse_client)` captures dbt events (`capture_events=True`) and every executed statement from `system.query_log` after `SYSTEM FLUSH LOGS`, returns `ModelRun(success, failure_text(), event_messages()/events_matching(), queries_matching())`; both fixtures are passed in by each test, no binder | `tests/helpers.py` |
+| `run_model(dbt, name, clickhouse_client)` captures dbt events (`capture_events=True`) and every executed statement as `(query, read_rows)` from `system.query_log` after `SYSTEM FLUSH LOGS`, returns `ModelRun(success, failure_text(), event_messages()/events_matching(), queries_matching(), insert_statements())`; both fixtures are passed in by each test, no binder | `tests/helpers.py` |
 | `LateWriter` context manager: builds its own client from the `clickhouse_settings` fixture, polls `system.processes` for the sleeping bucket query and inserts a row stamped `now64(9)`; excludes `system.processes` so it cannot match its own poll | `tests/helpers.py` |
 | Source DDL/DML helpers, row builders, engine/column/relation inspectors | `tests/helpers.py` |
 
@@ -111,25 +111,28 @@ error as defensive, so no contract claims testability for it.
 - `macros/bi_model.sql`: shared full-history/incremental model body, calling
   `dbt_peerdb.is_incremental()` (F2), with parameters `watermark_operator`,
   `sleep_seconds`, `include_marker`, `guard_expression`, `detection_flags`.
-- 15 behavioural models (`bi_basic`, `bi_defaults`, `bi_strict`,
+- 22 behavioural models (`bi_basic`, `bi_defaults`, `bi_strict`,
   `bi_concurrent`, `bi_concurrent_warn`, `bi_ignore`, `bi_failing`,
-  `bi_predicates`, `bi_schema_append`, `bi_schema_sync`, `bi_schema_fail`,
-  `bi_unique_key_list`, `bi_incremental_detection`, `bi_partitioned`,
-  `bi_hooks`) and 19
+  `bi_predicates`, `bi_incremental_predicates`, `bi_schema_append`,
+  `bi_schema_sync`, `bi_schema_fail`, `bi_unique_key_list`,
+  `bi_incremental_detection`, `bi_partitioned`, `bi_one_per_bucket`,
+  `bi_uuid_range`, `bi_ref`, `bi_ref_package`, `bi_ref_tuple`,
+  `bi_source_tuple`, `bi_hooks`) and 34
   validation models (bad identifiers, mismatched `unique_key`, invalid
   `rows_per_bucket`, invalid `on_concurrent_writes`, `inserts_only`,
   non-delete_insert strategies, pre-hook ordering, missing and duplicated
-  marker).
+  marker, ref/source shape and resolution), plus the plain upstream table
+  model `bi_ref_source`.
 
-### Tests (73 passed, `pytest -q` from the repo root, ~40 s)
+### Tests (107 passed, `pytest -q` from the repo root, ~55 s)
 
 | Module | Tests | Covers |
 |---|---|---|
 | `test_clickhouse.py` | 3 | pinned version, `system.query_log` availability, `ClickHouseColumn` wrapper flags |
-| `test_bucketed_incremental_validation.py` | 31 | every error-reference row reachable through the contract; validation before pre-hooks; marker missing/duplicated; source/key/snapshot contract; wrapped keys (`Nullable`, `LowCardinality`); negative keys |
-| `test_bucketed_incremental_build.py` | 23 | dedupe, bucket sizing and `<= S0` bounds, defaults, empty source (first run and rebuild), bucket failure leaves target untouched and leftovers are dropped, all six signed and six unsigned integer key types, UUID (`reinterpretAsUInt64`), timezone in the bound, full/incremental/full-refresh path selection, package-qualified incremental detection, `partition_by` applied to the built table |
+| `test_bucketed_incremental_validation.py` | 52 | every error-reference row reachable through the contract; validation before pre-hooks; marker missing/duplicated; source/key/snapshot contract; wrapped keys (`Nullable`, `LowCardinality`); negative keys |
+| `test_bucketed_incremental_build.py` | 34 | dedupe, bucket sizing and `<= S0` bounds, defaults, empty source (first run and rebuild), bucket failure leaves target untouched and leftovers are dropped, all six signed and six unsigned integer key types, UUID range predicates (interior `<`, last `<=`, snapshot bound, balanced remainder, zero step, 128-bit precision, versions share a bucket), primary-key pruning, timezone in the bound, full/incremental/full-refresh path selection, package-qualified incremental detection, `partition_by` applied to the built table |
 | `test_bucketed_incremental_publish.py` | 5 | first-run rename, rebuild `EXCHANGE TABLES` and backup drop, view target takes the two-rename path, preexisting tmp/backup dropped, pre/post hooks run |
-| `test_bucketed_incremental_incremental.py` | 8 | delete+insert replaces only touched keys, predicates reach the delete, schema append/sync/fail, tie-safe `>=` recaptures an S0 tie, strict `>` misses it, list-form `unique_key` |
+| `test_bucketed_incremental_incremental.py` | 10 | delete+insert replaces only touched keys, predicates and the `incremental_predicates` alias reach the delete, schema append/sync/fail, tie-safe `>=` recaptures an S0 tie, strict `>` misses it, backdated residual documented, list-form `unique_key` |
 | `test_bucketed_incremental_concurrency.py` | 3 | `error` fails and leaves target untouched, `warn` publishes stale then converges on the next incremental run, `ignore` runs no detection query |
 
 ### Macro fix
