@@ -1,10 +1,12 @@
 # bucketed_incremental Specification
 
+> Status: frozen v2 · approved 2026-10-02
+
 ## Purpose
 
-The `bucketed_incremental` materialization builds and maintains large ClickHouse tables that a change-data-capture process writes to continuously. A full refresh loads the source in sequential key buckets into an intermediate relation and publishes the finished table in one step, so readers never see a half-built table and a failed build leaves the previous contents in place. Incremental runs replace only the keys that the source touched, using the adapter's delete+insert path. A required snapshot column pins every bucket to a captured bound, and a post-build check fails a rebuild when writes land mid-build, so concurrent writers cannot slip through unnoticed.
+The `bucketed_incremental` materialization builds and maintains large ClickHouse tables that a change-data-capture process writes to continuously. A full refresh loads the source in sequential key buckets into an intermediate relation and publishes the finished table in one step, so readers never see a half-built table and a failed build leaves the previous contents in place. Integer keys partition by modulo; UUID keys partition into contiguous key ranges, so a source sorted by the key reads only each bucket's range. Incremental runs replace only the keys that the source touched, using the adapter's delete+insert path. A required snapshot column pins every bucket to a captured bound, and a post-build check fails a rebuild when writes land mid-build, so concurrent writers cannot slip through unnoticed.
 
-Terms (`bucket_key_column`, `bucket_ref`, `bucket_source`, snapshot column, `S0`, `W`, high watermark, marker) are defined once in [design Terminology](design.md#terminology); columns name data while watermarks are thresholds derived from the snapshot column.
+Terms (`bucket_key_column`, `bucket_ref`, `bucket_source`, snapshot column, `S0`, `W`, high watermark, marker, key bounds, step, remainder, boundary, range) are defined once in [design Terminology](design.md#terminology); columns name data while watermarks are thresholds derived from the snapshot column.
 
 ## Requirements
 
@@ -55,9 +57,18 @@ The model SQL for a full refresh SHALL contain the marker `-- __BUCKET_PREDICATE
 
 #### Scenario: Marker replaced
 - **WHEN** a bucket pass runs
-- **THEN** the marker is replaced by a `where` clause of the form `<key expression> % <bucket count> = <bucket index>`
+- **THEN** the marker is replaced by a `where` clause whose key form depends on the key type (see the two scenarios below)
 - **AND** the clause also carries `<snapshot column> <= <snapshot bound>` when pinning applies
 - **AND** the replacement itself begins with `where`, so the full-history branch holds no `WHERE` before the marker
+
+#### Scenario: Integer predicate
+- **WHEN** the key is a signed or unsigned integer
+- **THEN** the predicate is `<key> % <bucket count> = <bucket index>`
+
+#### Scenario: UUID range predicate
+- **WHEN** the key is a UUID
+- **THEN** the predicate is `<key> >= <lower> and <key> < <upper>`
+- **AND** the last pass uses `<= <upper>` so the maximum key is included
 
 #### Scenario: Marker missing or duplicated
 - **WHEN** the SQL for a full refresh contains no marker or more than one marker
@@ -83,6 +94,7 @@ The materialization SHALL size buckets from `rows_per_bucket`, a positive intege
 #### Scenario: Run log
 - **WHEN** the count query completes
 - **THEN** the materialization logs the row count, the bucket count and the captured snapshot maximum
+- **AND** a UUID run also logs the key bounds and the step
 
 ### Requirement: Empty Source
 
@@ -91,6 +103,7 @@ The materialization SHALL treat a source with no rows as an empty build, not an 
 #### Scenario: Empty source
 - **WHEN** the resolved bucket relation contains no rows
 - **THEN** the materialization builds an empty table with a `where 1 = 0` predicate in place of the marker
+- **AND** a UUID run computes no key bounds and runs no boundary query
 - **AND** it publishes that table through the normal publish step
 
 ### Requirement: Configuration Validation
@@ -205,11 +218,11 @@ The materialization SHALL bucket on one column that never changes and identifies
 
 #### Scenario: UUID key
 - **WHEN** the source `bucket_key_column` is a non-null `UUID` column
-- **THEN** the bucket expression is `reinterpretAsUInt64(bucket_key_column)`
+- **THEN** the bucket predicate compares the key column directly against constant UUID range bounds (see UUID Key Range Partition)
 
 #### Scenario: Integer key
 - **WHEN** the source `bucket_key_column` is a non-null `Int8`, `Int16`, `Int32`, `Int64`, `Int128`, `Int256`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128` or `UInt256` column
-- **THEN** the bucket expression is `bucket_key_column`
+- **THEN** the bucket predicate is `<key> % <bucket count> = <bucket index>`
 
 #### Scenario: Unsupported key type
 - **WHEN** the source key column is nullable, wrapped, or of any other type
@@ -223,6 +236,100 @@ The materialization SHALL bucket on one column that never changes and identifies
 #### Scenario: Missing key column
 - **WHEN** the resolved bucket relation does not contain `bucket_key_column`
 - **THEN** the run stops with a compiler error
+
+### Requirement: UUID Key Range Partition
+
+When the bucket key column is a non-null UUID column, every full-refresh bucket pass SHALL filter that column to one contiguous key range.
+
+#### Scenario: UUID key
+- **WHEN** the resolved bucket relation's `bucket_key_column` is a non-null UUID column
+- **THEN** each bucket pass filters the key column with a lower and an upper UUID bound
+- **AND** no bucket pass contains `reinterpretAsUInt64`
+
+#### Scenario: Boundary key
+- **WHEN** a key value equals an interior range boundary
+- **THEN** the value matches exactly one bucket pass: the range above the boundary
+- **AND** the range below the boundary does not match it
+
+### Requirement: Key Statistics
+
+A full refresh on a UUID key SHALL capture the row count, the key minimum, the key maximum and the snapshot maximum from one statistics statement.
+
+#### Scenario: Captured bounds
+- **WHEN** the statistics statement completes
+- **THEN** the captured minimum and maximum equal the least and greatest `reinterpretAsUInt128` key values in the bucket relation
+
+#### Scenario: 128-bit exactness
+- **WHEN** keys sit near the top of the unsigned 128-bit range
+- **THEN** the captured bounds keep full precision
+- **AND** the published target contains every key
+
+### Requirement: Balanced Boundary Coverage
+
+Given row count `R`, `rows_per_bucket` `B`, bucket count `N = ceil(R / B)` and key bounds `m` and `M`, the materialization SHALL cover `[m, M]` with `N` ranges that neither gap nor overlap, where boundary `b_i = m + i * floor((M - m) / N) + min(i, (M - m) mod N)` and `b_N = M`.
+
+#### Scenario: Remainder spread
+- **WHEN** `M - m` is not divisible by `N`
+- **THEN** the first `(M - m) mod N` ranges are one key value wider than the rest
+- **AND** no range absorbs the whole remainder
+
+#### Scenario: Zero step
+- **WHEN** `M - m` is smaller than `N`, so `floor((M - m) / N)` is zero
+- **THEN** boundaries advance by at most one key value
+- **AND** distinct keys spread across buckets instead of collapsing into the last one
+
+#### Scenario: Single bucket
+- **WHEN** `R` is at most `B`
+- **THEN** `N` is one and the single range covers `[m, M]` inclusive
+
+### Requirement: Direct Key Comparison
+
+The range predicate SHALL compare the key column directly against constant UUID literals, without a function applied to the column.
+
+#### Scenario: Predicate shape
+- **WHEN** a UUID bucket pass runs
+- **THEN** both bounds appear as constant UUID literals in the statement
+- **AND** the key column appears bare on the left of each comparison
+
+### Requirement: Bucket Coverage
+
+Every source row stamped at or below `S0` SHALL match exactly one UUID bucket predicate.
+
+#### Scenario: Minimum and maximum keys
+- **WHEN** a row carries the minimum or the maximum key
+- **THEN** the row is included in the first or the last range respectively
+
+#### Scenario: Clustered keys
+- **WHEN** keys are clustered so ranges hold different row counts
+- **THEN** every row is still covered by exactly one range
+- **AND** bucket row counts may be uneven
+
+#### Scenario: Writes above the bound
+- **WHEN** a row is stamped above `S0`
+- **THEN** no bucket pass reads it
+
+### Requirement: One Bucket per Key
+
+All versions of one key SHALL fall in the same bucket.
+
+#### Scenario: Versions of one key
+- **WHEN** one key has several versions with different snapshots
+- **THEN** every version lands in the same bucket
+- **AND** the target keeps one row for the key
+
+### Requirement: Source Ordering Contract
+
+A model whose `bucket_key_column` is a UUID SHALL point `bucket_ref` or `bucket_source` at a relation whose sorting key leads with that column.
+
+#### Scenario: Ordered source
+- **WHEN** the bucket relation is sorted by the key
+- **THEN** each bucket pass reads only its range
+- **AND** the rows read by all bucket passes together stay well below one source scan per bucket
+
+#### Scenario: Unordered source
+- **WHEN** the bucket relation is not sorted by the key
+- **THEN** bucket contents stay correct
+- **AND** each pass may scan the relation; the materialization does not enforce the ordering
 
 ### Requirement: Bucket Relation Contract
 
@@ -375,3 +482,20 @@ The suite SHALL cover, beyond the existing matrix:
 - The relation contract (missing relation, non-table relation, missing key or snapshot column) holds for the ref branch, not only the source branch.
 - Resolution failure (unknown model, undeclared source) stops the run with dbt's error.
 - An incremental run does not resolve the bucket relation, but still rejects a wrong-shaped key.
+- A UUID key build emits range predicates and no `reinterpretAsUInt64`.
+- Interior UUID passes use `<` and the last pass uses `<=` on the upper bound.
+- Every UUID pass carries the snapshot bound.
+- Rows at the minimum, at an interior boundary and at the maximum are each in exactly one bucket.
+- Versions of one key share a bucket and dedupe.
+- Dense keys with a zero step spread across buckets.
+- A remainder is spread across the first buckets.
+- Bounds near the top of the 128-bit range keep full precision.
+- An empty UUID source builds an empty table.
+- Integer keys keep the modulo predicate.
+- A UUID source sorted by the key reads far fewer rows than one source scan per bucket.
+
+## Amendments
+
+### 2026-10-02: UUID keys bucket by range
+
+`bucket_key_column` UUID columns now bucket by contiguous key ranges derived from the source key minimum and maximum instead of `reinterpretAsUInt64(bucket_key_column)`. The requirements above state the current contract; integer keys are unchanged, there are no configuration changes, and published tables are unchanged.

@@ -1,7 +1,8 @@
 # bucketed_incremental implementation review
 
 Date: 2026-09-23.
-Scope: `docs/bucketed_incremental/{spec,design,concurrent-writes-data-loss,integration-test-plan,integration-test-implementation}.md` against `macros/materializations/{bucketed_incremental.sql,is_incremental.sql}` and `tests/test_bucketed_incremental_*.py` plus `tests/helpers.py` and `tests/fixtures/dbt`.
+Note (2026-10-02): this review predates UUID range bucketing (design D7 and D12–D17). Its verdicts describe the modulo implementation; the UUID requirements and tests were added later.
+Scope: `docs/plans/bucketed-incremental/{spec,design,concurrent-writes-data-loss,integration-test-plan,integration-test-implementation}.md` against `macros/materializations/{bucketed_incremental.sql,is_incremental.sql}` and `tests/test_bucketed_incremental_*.py` plus `tests/helpers.py` and `tests/fixtures/dbt`.
 
 Method: read-only inspection. No test runs. Line references are to `macros/materializations/bucketed_incremental.sql` unless stated.
 
@@ -146,7 +147,7 @@ Gaps worth closing, in priority order:
 ## 8. References
 
 - Implementation: `macros/materializations/bucketed_incremental.sql`, `macros/materializations/is_incremental.sql`.
-- Contract: `docs/bucketed_incremental/spec.md`, `docs/bucketed_incremental/design.md`.
-- Hazard analysis: `docs/bucketed_incremental/concurrent-writes-data-loss.md`.
-- Test record: `docs/bucketed_incremental/integration-test-plan.md`, `docs/bucketed_incremental/integration-test-implementation.md`.
+- Contract: `docs/plans/bucketed-incremental/spec.md`, `docs/plans/bucketed-incremental/design.md`.
+- Hazard analysis: `docs/plans/bucketed-incremental/concurrent-writes-data-loss.md`.
+- Test record: `docs/plans/bucketed-incremental/integration-test-plan.md`, `docs/plans/bucketed-incremental/integration-test-implementation.md`.
 - Suite: `tests/test_bucketed_incremental_{validation,build,publish,incremental,concurrency}.py`, `tests/test_clickhouse.py`, `tests/helpers.py`, `tests/fixtures/dbt`.

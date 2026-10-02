@@ -8,7 +8,7 @@
 
 ## What is tested
 
-Every requirement and scenario in `docs/bucketed_incremental/spec.md` and every row of the error reference in `docs/bucketed_incremental/design.md`, asserted through observable effects only: target table contents, captured dbt events, `system.query_log` after `SYSTEM FLUSH LOGS`, and relation lifecycle (`system.tables`).
+Every requirement and scenario in `docs/plans/bucketed-incremental/spec.md` and every row of the error reference in `docs/plans/bucketed-incremental/design.md`, asserted through observable effects only: target table contents, captured dbt events, `system.query_log` after `SYSTEM FLUSH LOGS`, and relation lifecycle (`system.tables`).
 
 Two scenarios are unreachable through the public contract; the suite documents them instead of faking them:
 
@@ -45,10 +45,11 @@ tests/
 - autouse `clean_database` fixture: drops every relation in `default` before each test (branch on engine: `View` → `drop view`, `Dictionary` → `drop dictionary`, else `drop table`), so leftover `__dbt_tmp`/`__dbt_backup`/`__dbt_new_data_*` never leak between tests.
 - `run_model(dbt, name, clickhouse_client, *, full_refresh=False) -> ModelRun`, capturing, around one `dbt.run(select=name, full_refresh=..., capture_events=True)`:
   - `events`: dbt events (`EventMsg`) collected via the runner callback during the run,
-  - `queries`: `system.query_log` statements with `event_time_microseconds >=` a server timestamp taken before the run, read after `SYSTEM FLUSH LOGS`; filtered to initial-query terminal rows and excluding the harness's own queries plus the adapter's `__dbt_exchange_test_*` exchange probe,
+  - `statements`: `(query, read_rows)` pairs from `system.query_log` with `event_time_microseconds >=` a server timestamp taken before the run, read after `SYSTEM FLUSH LOGS`; filtered to initial-query terminal rows and excluding the harness's own queries plus the adapter's `__dbt_exchange_test_*` exchange probe,
+  - `queries`: the statement texts,
   - `result`: the `dbtRunnerResult`.
-- `ModelRun.success`, `ModelRun.failure_text()` (concatenates `result.exception` and each `result.results[i].message`; all `raise_compiler_error` messages are substring-matched), `event_messages()`, `events_matching(pattern)`, `queries_matching(pattern)`.
-- Source helpers: `create_source(key_type="UInt64", snapshot_type="DateTime64(9)", table="bi_source", include_key/snapshot=True, order_by="tuple()")`, `insert_rows`, `replace_rows`, `fetch_rows`, `query_scalar`, `table_names`, `table_engine`. `Int128`/`Int256` inserts fall back to SQL `insert ... values (toInt128(...))` if the driver rejects native ints.
+- `ModelRun.success`, `ModelRun.failure_text()` (concatenates `result.exception` and each `result.results[i].message`; all `raise_compiler_error` messages are substring-matched), `event_messages()`, `events_matching(pattern)`, `queries_matching(pattern)`, `insert_statements()` (INSERT statements with `read_rows`, excluding the adapter's `create table ... empty as` schema probe).
+- Source helpers: `create_source(key_type="UInt64", snapshot_type="DateTime64(9)", table="bi_source", include_key/snapshot=True, order_by="tuple()")`, `insert_rows`, `insert_generated_rows`, `insert_generated_uuid_rows`, `clickhouse_uuid`/`clickhouse_uuid_value` (ClickHouse swaps the UUID's 64-bit halves), `fetch_rows`, `query_scalar`, `relation_names`, `relation_exists`, `column_names`, `table_engine`, `table_partition_key`.
 - Concurrency helper: `late_writer(...)` context manager spawning a thread with its own client, built from `clickhouse_settings`, that polls `system.processes` for a query like `%sleepEachRow%`, then inserts one row stamped with server `now64(9)`; it joins on exit and re-raises any timeout/insert error so the test fails loudly instead of silently passing.
 
 Standard source schema (shared by all models): `id <key_type>`, `payload String`, `_peerdb_synced_at <snapshot_type>`, `_peerdb_is_deleted Int8`, `_peerdb_version Int64`; `MergeTree` `order by tuple()`.
@@ -57,25 +58,26 @@ Standard source schema (shared by all models): `id <key_type>`, `payload String`
 
 `models/sources.yml`: `sources: [{name: bi, schema: default, tables: [{name: bi_source}]}]`. Most models read `{{ source('bi', 'bi_source') }}` and set `bucket_source=['bi', 'bi_source']`, so one source name covers those scenarios (tests shape `default.bi_source` per case). A ref-branch fixture reads a plain upstream model through `{{ ref(...) }}` and sets `bucket_ref`, in one single-element and one package-qualified two-element form.
 
-`macros/bi_model.sql` holds the shared body (README model shape): `dbt_peerdb.is_incremental()` branches (package-qualified, because a plain `is_incremental()` resolves to the adapter/global macro, which does not recognise `bucketed_incremental`), `>=` watermark by default, `order by _peerdb_version desc, _peerdb_synced_at desc limit 1 by id`, and the single `-- __BUCKET_PREDICATE__` marker in the full branch. The body takes the relation as an argument and defaults to `{{ source('bi', 'bi_source') }}`; ref models pass `{{ ref(...) }}`, so the ref() call lives in the model body where dbt registers the DAG edge. Parameters: `watermark_operator` (`>=`/`>`), `sleep_seconds` (adds `and sleepEachRow(n) = 0` plus `settings max_threads=1` to the full branch only), `include_marker`, `relation`.
+`macros/bi_model.sql` holds the shared body (README model shape): `dbt_peerdb.is_incremental()` branches (package-qualified, because a plain `is_incremental()` resolves to the adapter/global macro, which does not recognise `bucketed_incremental`), `>=` watermark by default, `order by _peerdb_version desc, _peerdb_synced_at desc limit 1 by id`, and the single `-- __BUCKET_PREDICATE__` marker in the full branch. The body takes the relation as an argument and defaults to `{{ source('bi', 'bi_source') }}`; ref models pass `{{ ref(...) }}`, so the ref() call lives in the model body where dbt registers the DAG edge. Parameters: `watermark_operator` (`>=`/`>`), `sleep_seconds` (adds `and sleepEachRow(n) = 0` plus `settings max_threads=1` to the full branch only), `include_marker`, `guard_expression` (appends a failing expression to the output), `detection_flags` (appends the qualified and plain `is_incremental()` results), `relation`.
 
 Behavioral models (configs explicit in each file):
 
 | Model | Distinguishing config | Used for |
 |---|---|---|
-| `bi_basic` | `rows_per_bucket=3`, error | builds, sizing, empty source, incremental, ties, key types, UUID |
+| `bi_basic` | `rows_per_bucket=3`, error | builds, sizing, empty source, incremental, ties, key types, UUID ranges |
+| `bi_uuid_range` | `rows_per_bucket=5000` | primary-key pruning on a UUID source ordered by the key |
 | `bi_defaults` | no `rows_per_bucket`/`on_concurrent_writes` | defaults (1 bucket, detection runs) |
 | `bi_strict` | `watermark_operator='>'` | strict-watermark contract |
 | `bi_concurrent` | sleep 0.5s, error, 1 bucket | concurrent write → error |
 | `bi_concurrent_warn` | sleep 0.5s, warn, 1 bucket | concurrent write → warn, later convergence |
 | `bi_ignore` | `on_concurrent_writes='ignore'` | no detection query |
 | `bi_failing` | guard `throwIf(id = 3, ...)` | bucket failure, target untouched, leftover cleanup |
-| `bi_predicates` | `predicates=['id > 100']` | predicates reach delete+insert and are honoured |
+| `bi_predicates` | `predicates=['id >= 0']` | predicates reach delete+insert and are honoured |
 | `bi_schema_append` / `bi_schema_sync` / `bi_schema_fail` | `on_schema_change` variants | schema change |
 | `bi_unique_key_list` | `unique_key=['id']` | list form accepted |
 | `bi_hooks` | `pre_hook` and `post_hook` inserts | hooks run around the build |
 
-Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model()` or a marker + `select` when the marker itself is the subject): `bi_bucket_key_missing`, `bi_bucket_key_invalid`, `bi_snapshot_missing`, `bi_snapshot_invalid`, `bi_snapshot_equals_key`, `bi_relation_missing_config` (neither key), `bi_relation_invalid_config` (wrong shape), `bi_relation_both_config` (both keys), `bi_unique_key_missing`, `bi_unique_key_mismatch`, `bi_rows_bool`, `bi_rows_zero`, `bi_rows_float`, `bi_on_concurrent_invalid`, `bi_inserts_only`, `bi_strategy_append`, `bi_strategy_legacy`, `bi_bad_hook` (bad `rows_per_bucket` + pre-hook sentinel), `bi_no_marker`, `bi_two_markers`.
+Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model_sql()` or a marker + `select` when the marker itself is the subject): `bi_bucket_key_missing`, `bi_bucket_key_invalid`, `bi_snapshot_missing`, `bi_snapshot_invalid`, `bi_snapshot_equals_key`, `bi_relation_missing_config` (neither key), `bi_relation_invalid_config` (wrong shape), `bi_relation_both_config` (both keys), `bi_ref_empty`, `bi_ref_three`, `bi_ref_bad_element`, `bi_ref_unknown`, `bi_source_empty`, `bi_source_one`, `bi_source_three`, `bi_source_nonlist`, `bi_source_bad_element`, `bi_source_unknown`, `bi_unique_key_missing`, `bi_unique_key_mismatch`, `bi_unique_key_multi`, `bi_unique_key_empty`, `bi_rows_bool`, `bi_rows_zero`, `bi_rows_float`, `bi_rows_negative`, `bi_rows_string`, `bi_on_concurrent_invalid`, `bi_inserts_only`, `bi_strategy_append`, `bi_strategy_legacy`, `bi_bad_hook` (bad `rows_per_bucket` + pre-hook sentinel), `bi_no_marker`, `bi_two_markers`. The remaining behavioural models (`bi_defaults`, `bi_strict`, `bi_partitioned`, `bi_ref`, `bi_ref_package`, `bi_ref_tuple`, `bi_source_tuple`, `bi_incremental_detection`) and the upstream table model `bi_ref_source` are covered by the matrix below.
 
 ## Test matrix
 
@@ -110,7 +112,13 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 | empty rebuild | build, truncate, `--full-refresh` | target empty, exchange used |
 | bucket failure | build, add poison id, `--full-refresh` | failure; target keeps previous contents; then clean source, re-run `--full-refresh` → success and no `bi_failing__dbt_tmp` (leftover dropped) |
 | key types | parametrize all `UInt8..256`, `Int8..256` | success, target holds all ids, bucket query uses bare `id %` |
-| UUID key | `UUID` source | success, all rows, `reinterpretAsUInt64(id) %` in bucket query |
+| UUID key | `UUID` source, dense keys 0..9 | success; all rows; interior passes `id >= toUUID(...) and id < toUUID(...)`; last pass `<=`; every pass carries `_peerdb_synced_at <=`; no `reinterpretAsUInt64` |
+| UUID balanced boundaries | dense keys 0..9, B=3 | ranges `[(0,3),(3,5),(5,7),(7,9)]`; remainder spread across the first buckets |
+| UUID versions | key 3 on the interior boundary, two versions | both versions share one bucket; target dedupes to the latest |
+| UUID zero step | `bi_one_per_bucket`, dense keys | `step=0`; one range per key; all 10 rows |
+| UUID 128-bit precision | keys near `2**128 - 1` | first lower and last upper exact; all keys present |
+| empty UUID source | `UUID` source, 0 rows | `where 1 = 0`; no boundary query; no bucket pass |
+| UUID pruning | `bi_uuid_range`, UUID source `order by id`, 50k rows | 10 passes; each `read_rows < 50000`; total `< 50000 * 10 / 2` |
 | snapshot timezone | `DateTime64(9, 'UTC')` | success; bound literal ends `, 9, 'UTC')` |
 | ref branch build | `bi_ref` (1-element) and `bi_ref_package` (2-element) against an upstream table | success; target contents; count and detection queries render the ref relation |
 | list and tuple shapes | `bi_ref_tuple`, `bi_source_tuple` | success; target contents |
@@ -133,7 +141,8 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 |---|---|
 | delete+insert | update an existing key and add a new one: changed/new keys replaced, untouched key byte-identical; `delete from` + `insert into` + `__dbt_new_data_` in `query_log`; no new-data relation left; target row count |
 | no bucketing | `query_log` has no marker predicate / bucket log lines during incremental |
-| predicates | update one key `id <= 100` and one `id > 100`; only the latter replaces; delete query contains `and id > 100` |
+| predicates | update key 0; delete query contains `and id >= 0`; the update lands |
+| incremental predicates alias | same with `incremental_predicates` |
 | schema append | target pre-created without `payload`; `append_new_columns`: success, column added, data present |
 | schema sync | target pre-created with obsolete column; `sync_all_columns`: column dropped, missing column added |
 | schema fail | mismatch → run fails |
@@ -166,12 +175,12 @@ Validation models (one bad/edge value each, valid elsewhere; SQL from `bi_model(
 .venv/bin/clickhousectl local server stop
 ```
 
-Also `make lint` (or `pre-commit run ruff-check --hook-stage manual --all-files`). Expected suite runtime on the local node: roughly 2–4 minutes (~60 dbt invocations), plus ~15–30 s for the sleep-based concurrency cases.
+Also `make lint` (or `pre-commit run ruff-check --hook-stage manual --all-files`). Expected suite runtime on the local node: about a minute (107 tests, one dbt invocation each), plus ~15–30 s for the sleep-based concurrency cases.
 
 ## Risks and mitigations
 
 - **Concurrency flake**: bucket zero is slowed with `sleepEachRow(0.5)` and `settings max_threads=1` (server caps at 3 s/row); the writer polls every 20 ms and the helper raises on timeout instead of passing silently.
-- **`clickhouse__create_table_as` emits CREATE EMPTY AS SELECT + INSERT** (`dbt/include/clickhouse/macros/materializations/table.sql:266`), so bucket 0's predicate may appear twice in `query_log`; assertions use sets of bucket indices, not statement counts.
+- **`clickhouse__create_table_as` emits CREATE EMPTY AS SELECT + INSERT** (`dbt/include/clickhouse/macros/materializations/table.sql:266`), so bucket 0's predicate may appear twice in `query_log`; assertions use sets of bucket indices or `ModelRun.insert_statements()`, not raw statement counts.
 - **Event capture**: `run_model` passes `capture_events=True` so `dbtRunner` collects `EventMsg`s via its callback; `events_matching()` filters the `.msg` text (e.g. `JinjaLogInfo` for the `info=True` log lines). No file-log reads.
 - **`system.query_log` disabled**: the `clickhouse` fixture asserts the table exists and `log_queries = 1` up front and fails with a clear message.
 - **Timezone-rendered bounds**: never assert exact timestamp strings except the `'UTC'` suffix test; rely on regex + bucket index sets.

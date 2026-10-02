@@ -10,6 +10,7 @@ from dw_lib.database import ClickHouseSettings
 from dw_lib.dbt import Dbt, DbtInvocationResult
 from types import TracebackType
 from typing import Any, Self
+from uuid import UUID
 
 import clickhouse_connect
 import pytest
@@ -167,9 +168,10 @@ def create_source(
     table: str = SOURCE_TABLE,
     include_key: bool = True,
     include_snapshot: bool = True,
+    order_by: str = "tuple()",
 ) -> None:
-    """Create or replace the standard source table, optionally varying the key and snapshot types or
-    omitting either column."""
+    """Create or replace the standard source table, optionally varying the key and snapshot types,
+    omitting either column, or sorting by a key expression."""
     definitions: list[str] = []
     if include_key:
         definitions.append(f"id {key_type}")
@@ -181,7 +183,7 @@ def create_source(
 
     clickhouse_client.command(
         f"create or replace table {clickhouse_client.database}.{table} ({', '.join(definitions)}) "
-        "engine MergeTree order by tuple()"
+        f"engine MergeTree order by {order_by}"
     )
 
 
@@ -212,6 +214,44 @@ def insert_generated_rows(
     clickhouse_client.command(
         f"insert into {clickhouse_client.database}.{table} "
         f"select to{key_type}(number), concat('value-', toString(number)), "
+        f"['af-south', 'eu-west', 'us-east'][toUInt8((number % 3) + 1)], "
+        f"toDateTime64('{timestamp}', 9), toInt8(0), toInt64(1) from numbers({count})"
+    )
+
+
+def clickhouse_uuid(value: int) -> UUID:
+    """Python UUID whose ClickHouse `reinterpretAsUInt128` equals value.
+
+    ClickHouse stores a UUID as a UInt128 with the two 64-bit halves swapped relative to the
+    canonical text, so `uuid.UUID(int=value)` is not dense in ClickHouse key order.
+    """
+    return UUID(int=((value & 0xFFFFFFFFFFFFFFFF) << 64) | (value >> 64))
+
+
+def clickhouse_uuid_value(value: UUID) -> int:
+    """ClickHouse `reinterpretAsUInt128` of a UUID, the inverse of `clickhouse_uuid`."""
+    return ((value.int & 0xFFFFFFFFFFFFFFFF) << 64) | (value.int >> 64)
+
+
+def insert_generated_uuid_rows(
+    clickhouse_client: Client,
+    *,
+    count: int = 3,
+    table: str = SOURCE_TABLE,
+    multiplier: int = 2654435761,
+    offset: int = 17,
+) -> None:
+    """Insert count rows with distinct, spread UUID ids derived from number, stamped at
+    SNAPSHOT_BASE.
+
+    The default multiplier scatters keys over the 128-bit space; pass multiplier=1, offset=0 for
+    dense consecutive UUIDs.
+    """
+    timestamp = SNAPSHOT_BASE.strftime("%Y-%m-%d %H:%M:%S.%f")
+    clickhouse_client.command(
+        f"insert into {clickhouse_client.database}.{table} "
+        f"select reinterpretAsUUID(toUInt128(number) * toUInt128({multiplier}) + {offset}), "
+        f"concat('value-', toString(number)), "
         f"['af-south', 'eu-west', 'us-east'][toUInt8((number % 3) + 1)], "
         f"toDateTime64('{timestamp}', 9), toInt8(0), toInt64(1) from numbers({count})"
     )
@@ -266,8 +306,8 @@ def is_capture_noise(query: str) -> bool:
     )
 
 
-def fetch_executed_queries(clickhouse_client: Client, since: int) -> list[str]:
-    """Statements that finished after the marker, from system.query_log.
+def fetch_executed_statements(clickhouse_client: Client, since: int) -> list[tuple[str, int]]:
+    """Statements that finished after the marker, with their read_rows, from system.query_log.
 
     SYSTEM FLUSH LOGS forces the query log buffer to disk; without it the rows are flushed on
     flush_interval_milliseconds, which defaults to 7500 ms. QueryStart rows are excluded so each
@@ -276,14 +316,14 @@ def fetch_executed_queries(clickhouse_client: Client, since: int) -> list[str]:
     clickhouse_client.command("system flush logs")
     rows = fetch_rows(
         clickhouse_client,
-        "select query from system.query_log "
+        "select query, read_rows from system.query_log "
         "where event_time_microseconds >= fromUnixTimestamp64Micro({since:Int64}) "
         "and is_initial_query = 1 "
         "and type in ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart') "
         "order by event_time_microseconds, query_id",
         {"since": since},
     )
-    return [row[0] for row in rows if not is_capture_noise(row[0])]
+    return [(row[0], row[1]) for row in rows if not is_capture_noise(row[0])]
 
 
 @dataclass
@@ -293,6 +333,7 @@ class ModelRun:
     result: DbtInvocationResult
     events: list[EventMsg]
     queries: list[str]
+    statements: list[tuple[str, int]]
 
     @property
     def success(self) -> bool:
@@ -333,6 +374,17 @@ class ModelRun:
         """Executed statements matching the given case-insensitive regex."""
         regex = re.compile(pattern, re.IGNORECASE | re.DOTALL)
         return [query for query in self.queries if regex.search(query)]
+
+    def insert_statements(self) -> list[tuple[str, int]]:
+        """Executed INSERT statements with their read_rows.
+
+        The adapter's create table as select runs a `create table ... empty as (select ...)` schema
+        probe and then an `insert ... select`; filtering to inserts keeps one statement per bucket
+        and excludes the probe, which reads no rows.
+        """
+        return [
+            (query, read_rows) for query, read_rows in self.statements if "insert into" in query
+        ]
 
 
 class LateWriter:
@@ -430,9 +482,14 @@ class BucketedIncrementalTest(IntegrationTest):
 
         result = dbt.run(select=model, full_refresh=full_refresh, capture_events=True)
 
-        queries = fetch_executed_queries(clickhouse_client, since)
+        statements = fetch_executed_statements(clickhouse_client, since)
 
-        return ModelRun(result=result, events=result.events, queries=queries)
+        return ModelRun(
+            result=result,
+            events=result.events,
+            queries=[query for query, _ in statements],
+            statements=statements,
+        )
 
     def create_standard_source(
         self, clickhouse_client: Client, rows: Sequence[Sequence[Any]], **kwargs: Any
@@ -452,12 +509,16 @@ __all__ = [
     "LateWriter",
     "ModelRun",
     "base_rows",
+    "clickhouse_uuid",
+    "clickhouse_uuid_value",
     "column_names",
     "create_source",
     "drop_all_relations",
     "expected_base_rows",
+    "fetch_executed_statements",
     "fetch_rows",
     "insert_generated_rows",
+    "insert_generated_uuid_rows",
     "insert_rows",
     "late_insert_sql",
     "make_client",

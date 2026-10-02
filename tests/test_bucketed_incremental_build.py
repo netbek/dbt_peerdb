@@ -1,11 +1,15 @@
 from .helpers import (
     base_rows,
     BucketedIncrementalTest,
+    clickhouse_uuid,
+    clickhouse_uuid_value,
     create_source,
     expected_base_rows,
     fetch_rows,
     insert_generated_rows,
+    insert_generated_uuid_rows,
     insert_rows,
+    ModelRun,
     query_scalar,
     REGIONS,
     relation_exists,
@@ -21,6 +25,18 @@ from uuid import UUID
 
 import pytest
 import re
+
+
+def uuid_bucket_ranges(run: ModelRun) -> list[tuple[int, int]]:
+    """Lower and upper reinterpretAsUInt128 bounds of each UUID range INSERT, in execution order."""
+    ranges = []
+    for query, _ in run.insert_statements():
+        if "toUUID(" not in query:
+            continue
+        lower, upper = re.findall(r"toUUID\('([0-9a-f-]+)'\)", query)
+        ranges.append((clickhouse_uuid_value(UUID(lower)), clickhouse_uuid_value(UUID(upper))))
+    return ranges
+
 
 INTEGER_KEY_TYPES = [
     "UInt8",
@@ -228,9 +244,11 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert run.queries_matching(r"reinterpretAsUInt64") == []
 
     def test_uuid_key(self, dbt: Dbt, clickhouse_client: Client):
-        """UUID has no modulo, so the inferred uuid key buckets through reinterpretAsUInt64."""
+        """UUID keys bucket by contiguous ranges, not reinterpretAsUInt64 modulo: ten dense keys at
+        rows_per_bucket=3 yield four passes whose bounds use >=/< (and <= on the last) plus the
+        snapshot bound."""
         create_source(clickhouse_client, key_type="UUID")
-        keys = [UUID(int=i) for i in range(3)]
+        keys = [clickhouse_uuid(i) for i in range(10)]
         insert_rows(
             clickhouse_client,
             [
@@ -245,7 +263,129 @@ class TestFullRefresh(BucketedIncrementalTest):
         assert fetch_rows(clickhouse_client, "select id from default.bi_basic order by id") == [
             (key,) for key in keys
         ]
-        assert run.queries_matching(r"reinterpretAsUInt64\(id\) % \d+ = \d+")
+        assert run.queries_matching(r"reinterpretAsUInt64") == []
+        inserts = [query for query, _ in run.insert_statements()]
+        interior = [
+            query
+            for query in inserts
+            if re.search(
+                r"id >= toUUID\('[0-9a-f-]+'\) and id < toUUID\('[0-9a-f-]+'\) "
+                r"and _peerdb_synced_at <= toDateTime64\(",
+                query,
+            )
+        ]
+        last = [
+            query
+            for query in inserts
+            if re.search(
+                r"id >= toUUID\('[0-9a-f-]+'\) and id <= toUUID\('[0-9a-f-]+'\) "
+                r"and _peerdb_synced_at <= toDateTime64\(",
+                query,
+            )
+        ]
+        assert len(interior) == 3
+        assert len(last) == 1
+        assert run.events_matching(r"min_key=\d+ max_key=\d+ step=\d+")
+
+    def test_uuid_balanced_boundaries(self, dbt: Dbt, clickhouse_client: Client):
+        """The remainder spreads across the first buckets: dense keys 0..9 at rows_per_bucket=3
+        produce boundaries 0, 3, 5, 7, 9 rather than 0, 2, 4, 6, 9."""
+        create_source(clickhouse_client, key_type="UUID")
+        keys = [clickhouse_uuid(i) for i in range(10)]
+        insert_rows(
+            clickhouse_client,
+            [(key, f"value-{i}", "af-south", snapshot_at(i), 0, 1) for i, key in enumerate(keys)],
+        )
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert uuid_bucket_ranges(run) == [(0, 3), (3, 5), (5, 7), (7, 9)]
+
+    def test_uuid_versions_share_bucket(self, dbt: Dbt, clickhouse_client: Client):
+        """Versions of one key always share a bucket: key 3 sits exactly on the interior boundary 3
+        and carries two versions, yet both fall in [3, 5) and dedupe to the latest."""
+        create_source(clickhouse_client, key_type="UUID")
+        keys = [clickhouse_uuid(i) for i in range(10)]
+        rows = [(key, f"value-{i}", "af-south", snapshot_at(i), 0, 1) for i, key in enumerate(keys)]
+        rows.append((clickhouse_uuid(3), "value-3-v2", "af-south", snapshot_at(20), 0, 2))
+        insert_rows(clickhouse_client, rows)
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert uuid_bucket_ranges(run) == [(0, 3), (3, 5), (5, 7), (7, 9)]
+        assert fetch_rows(
+            clickhouse_client, "select id, payload from default.bi_basic order by id"
+        ) == [(key, "value-3-v2" if i == 3 else f"value-{i}") for i, key in enumerate(keys)]
+
+    def test_uuid_zero_step_spreads_dense_keys(self, dbt: Dbt, clickhouse_client: Client):
+        """rows_per_bucket=1 over dense keys makes step zero; balanced boundaries still give each
+        bucket at most one key instead of collapsing every row into the last bucket."""
+        create_source(clickhouse_client, key_type="UUID")
+        keys = [clickhouse_uuid(i) for i in range(10)]
+        insert_rows(
+            clickhouse_client,
+            [(key, f"value-{i}", "af-south", snapshot_at(i), 0, 1) for i, key in enumerate(keys)],
+        )
+
+        run = self.run_model(dbt, "bi_one_per_bucket", clickhouse_client)
+
+        assert run.success is True
+        assert run.events_matching(r"bucket_count=10 .*min_key=0 max_key=9 step=0")
+        assert uuid_bucket_ranges(run) == [(i, i + 1) for i in range(9)] + [(9, 9)]
+        assert (
+            query_scalar(clickhouse_client, "select count() from default.bi_one_per_bucket") == 10
+        )
+
+    def test_uuid_bounds_keep_128_bit_precision(self, dbt: Dbt, clickhouse_client: Client):
+        """Keys near the top of the 128-bit range stay exact: a Float64 boundary step would round
+        and drop or duplicate keys."""
+        create_source(clickhouse_client, key_type="UUID")
+        keys = [clickhouse_uuid(2**128 - 1 - i) for i in range(10)]
+        insert_rows(
+            clickhouse_client,
+            [(key, f"value-{i}", "af-south", snapshot_at(i), 0, 1) for i, key in enumerate(keys)],
+        )
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert fetch_rows(clickhouse_client, "select id from default.bi_basic order by id") == [
+            (key,) for key in sorted(keys)
+        ]
+        ranges = uuid_bucket_ranges(run)
+        assert ranges[0][0] == 2**128 - 10
+        assert ranges[-1][1] == 2**128 - 1
+
+    def test_empty_uuid_source_builds_empty_table(self, dbt: Dbt, clickhouse_client: Client):
+        """A UUID source with no rows skips the boundary query and builds the empty table."""
+        create_source(clickhouse_client, key_type="UUID")
+
+        run = self.run_model(dbt, "bi_basic", clickhouse_client)
+
+        assert run.success is True
+        assert query_scalar(clickhouse_client, "select count() from default.bi_basic") == 0
+        assert run.queries_matching(r"reinterpretAsUUID") == []
+        assert run.queries_matching(r"where 1 = 0")
+
+    def test_uuid_range_pruning(self, dbt: Dbt, clickhouse_client: Client):
+        """A UUID source sorted by the key prunes each bucket pass to its range: the passes together
+        read far less than one source scan per bucket, unlike modulo."""
+        create_source(clickhouse_client, key_type="UUID", order_by="id")
+        insert_generated_uuid_rows(clickhouse_client, count=50000)
+
+        run = self.run_model(dbt, "bi_uuid_range", clickhouse_client)
+
+        assert run.success is True
+        bucket_stats = [
+            (query, read_rows)
+            for query, read_rows in run.insert_statements()
+            if re.search(r"id >= toUUID\(", query)
+        ]
+        assert len(bucket_stats) == 10
+        assert all(read_rows < 50000 for _, read_rows in bucket_stats)
+        assert sum(read_rows for _, read_rows in bucket_stats) < 50000 * len(bucket_stats) // 2
 
     def test_snapshot_timezone_is_kept_in_bound(self, dbt: Dbt, clickhouse_client: Client):
         """The bound literal is built from the column dtype, so a DateTime64(9, 'UTC') snapshot
