@@ -8,7 +8,7 @@ The warehouse mirrors operational tables into ClickHouse with PeerDB, then dedup
 
 ClickHouse gives each query a consistent snapshot but no snapshot that spans separate statements. A rebuild split into many statements therefore reads a different source state in each one. Without a guard, a row written after its bucket has been read never appears in the target, and no later incremental run selects it. `docs/plans/bucketed-incremental/concurrent-writes-data-loss.md` records the analysis and the decision: pin every bucket to a captured snapshot bound, detect writes that land mid-build, and document the tie-safe watermark that lets the next incremental run recover them.
 
-UUID keys need one more consideration. The original modulo partition, `reinterpretAsUInt64(key) % N`, is not sargable, so every bucket scans the source. ClickHouse defines `using UUID = StrongTypedef<UInt128, UUIDTag>`, so UUID comparison is exactly `UInt128` comparison and a range predicate on the key is sargable against a table ordered by it. When the key is a UUID, the model contract is that the bucket relation is `PRIMARY KEY id ORDER BY id`; the materialization does not verify the sorting key.
+UUID keys need one more consideration. The original modulo partition, `reinterpretAsUInt64(key) % N`, is not sargable, so every bucket scans the source. ClickHouse defines `using UUID = StrongTypedef<UInt128, UUIDTag>`, so UUID comparison is exactly `UInt128` comparison and a range predicate on the key is sargable against a table ordered by it. The internal `UInt128` swaps the canonical halves, which decides how each UUID version is distributed in ClickHouse key order; see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor). When the key is a UUID, the model contract is that the bucket relation is `PRIMARY KEY id ORDER BY id`; the materialization does not verify the sorting key.
 
 ## Goals
 
@@ -182,6 +182,36 @@ After the bucket loop, `select max(snapshot) > S0` compares the source with the 
 | Bounds inflated by rows above `S0` | No coverage impact; ranges still contain every row at or below `S0` |
 | Unordered source | Correct contents, no pruning |
 
+### Modulo vs range by UUID flavor
+
+ClickHouse stores a UUID as a `UInt128` with the canonical 64-bit halves swapped, so `ORDER BY key` sorts by the canonical low half first and the canonical high half second. The modulo operand, `reinterpretAsUInt64(key)`, copies the low 64 bits of that value, which is the canonical high half. Range splits the ClickHouse key order; modulo hashes the canonical high half. The swap inverts the usual intuition about UUID versions: v7 keeps its timestamp in the canonical high half, so a v7 table is ordered by the random `rand_b` in the low half; v1 and v6 keep the node and clock sequence in the low half, so their order is node blocks, then time.
+
+`R` is the row count, `B` is `rows_per_bucket` and `N = ceil(R / B)`. The table assumes a source sorted by the key, which the model contract requires.
+
+| UUID flavor | ClickHouse key order | Modulo rows read | Range rows read | Modulo peak rows/statement | Range peak rows/statement | Modulo balance | Range balance |
+|-------------|----------------------|------------------|-----------------|----------------------------|---------------------------|----------------|---------------|
+| v4, v5, v3 | random | `N * R` | `R` | `B` | `B` | even | even |
+| v7, random `rand_b` | random | `N * R` | `R` | `B` | `B` | even | even |
+| v7, monotonic `rand_b`, reseeded per millisecond | generation order within a millisecond, random across milliseconds | `N * R` | `R` | `B` | `B` | even | even |
+| v1, v6, single node | node and clock-sequence block, then time | `N * R` | `R` | up to `R`: a regular cadence leaves every row in one residue | up to `R`: a burst window lands in one range | unreliable | arrival-rate dependent |
+| Dense counter keys | counter order | `N * R` | `R` | `B` | up to `R`: a counter band is one burst | even | burst-dependent |
+| Clustered or low-entropy keys | clustered | `N * R` | `R` | `B` when the hashed bits vary, otherwise up to `R` | up to `R`: the hot range | flavor-dependent | skewed |
+
+An unsorted source removes the range advantage: both predicates read `N * R` rows and keep the same per-statement peaks, because range prunes nothing.
+
+Other differences:
+
+| Dimension | Modulo | Range |
+|-----------|--------|-------|
+| Sargable | never | when the sorting key leads with the key |
+| Cost per scanned row | `reinterpretAsUInt64` and `%` | two constant comparisons |
+| Extra statements | none | key bounds in the stats query and one table-free boundary query |
+| Key bits used | canonical high 64 only | the full 128-bit key order |
+| `rows_per_bucket` promise | exact when the hashed bits are random | only for evenly spread keys |
+| Worst memory case | time-based UUID with a regular cadence | clustered keys with a burst |
+
+The modulo fallback has no niche worth a code path. Random-key flavors stay balanced under range and read `R` rows instead of `N * R`; time-ordered flavors are where modulo is most likely to be degenerate; dense counter keys belong in an integer column, which already uses modulo.
+
 ## Configuration reference
 
 | Config | Required | Default | Rules |
@@ -294,7 +324,7 @@ error and are not listed here.
 
 **Rationale.** ClickHouse has no modulo operator for `UUID`, and `reinterpretAsUInt64(...) % N` is not sargable, so every bucket scans the source. A UUID is a strong typedef of `UInt128`, so reinterpretation preserves order and a range predicate uses the source's primary-key index when the table is ordered by the key.
 
-**Consequences.** Bucket row counts depend on the key distribution: clustered keys can produce buckets larger than `rows_per_bucket` (see D17). Existing UUID models keep the same output but emit different statements.
+**Consequences.** Bucket row counts depend on the key distribution: clustered keys can produce buckets larger than `rows_per_bucket` (see D17 and [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor)). Existing UUID models keep the same output but emit different statements.
 
 ### D8: No resumability
 
@@ -364,7 +394,7 @@ error and are not listed here.
 
 **Decision.** UUID columns always use range bucketing; no flag selects the strategy.
 
-**Rationale.** The probe already infers the key type from the source, and the range partition is never worse than modulo: without an index both scan once per pass, and with an index the range wins. A flag would add surface and a way to misconfigure.
+**Rationale.** The probe already infers the key type from the source, so the source dtype stays the single source of truth. Range wins on I/O for the contract's sorted source; the cases where modulo bounds per-statement memory better are unsorted or clustered sources that the contract excludes, or counter keys that belong in an integer column (see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor)). A flag would add surface and a way to misconfigure.
 
 **Consequences.** Existing UUID models change statement shape with no opt-out; output is unchanged. Integer keys are untouched.
 
@@ -374,7 +404,7 @@ error and are not listed here.
 
 **Rationale.** Probing the sorting key adds a query and changes no behavior; detecting skew needs another pass over the source, which is the cost this feature removes. Random UUIDs spread uniformly, and the model contract guarantees the ordering.
 
-**Consequences.** A clustered key distribution can produce buckets larger than `rows_per_bucket`; this is the price of index locality and is stated in the spec and README.
+**Consequences.** A clustered key distribution (v1/v6 and counter keys; v7 keys are random in ClickHouse order) can produce buckets larger than `rows_per_bucket`; this is the price of index locality and is stated in the spec and README.
 
 ## Alternatives considered
 
@@ -383,7 +413,7 @@ error and are not listed here.
 | Upstream single-CTAS full refresh | No bound on memory or statement time; a failure discards all work |
 | `row_number()` sharding | The window must sort the whole source in one statement, which is the memory problem again |
 | One bucket per partition | Sources have no partition key |
-| Keep modulo for UUID | Not sargable; `N` full scans per rebuild |
+| Keep modulo for UUID | Not sargable (`N` full scans per rebuild) and unreliable for time-based UUIDs under a regular cadence; see [Modulo vs range by UUID flavor](#modulo-vs-range-by-uuid-flavor) |
 | Plain floor-division boundaries | Last range absorbs the remainder; dense keys collapse into one range |
 | `quantilesExact` boundaries | Reads and sorts every key in one statement, the memory problem the materialization exists to avoid |
 | Approximate quantiles or sampling | Nondeterministic boundaries and no exact coverage guarantee |
@@ -429,5 +459,6 @@ The integration harness runs ClickHouse 26.3.33.24 as a local server managed by 
 - Upstream materialization: `vendor/dbt-clickhouse/dbt/include/clickhouse/macros/materializations/incremental/incremental.sql` (adapter version 1.10.3).
 - Adapter strategy resolution and validation: `vendor/dbt-clickhouse/dbt/adapters/clickhouse/impl.py`.
 - ClickHouse `base/base/UUID.h`: `using UUID = StrongTypedef<UInt128, UUIDTag>`.
-- ClickHouse `src/Functions/reinterpretAs.cpp`: `reinterpretAsUInt128` accepts UUID; `reinterpretAsUUID` returns UUID.
+- ClickHouse `src/Functions/reinterpretAs.cpp`: `reinterpretAsUInt128` accepts UUID; `reinterpretAsUUID` returns UUID; `reinterpretAsUInt64` copies the low half of the internal `UInt128`.
+- `tests/helpers.py`: `clickhouse_uuid` and `clickhouse_uuid_value` encode the UUID halves swap.
 - ClickHouse `src/Storages/MergeTree/MergeTreeData.cpp`: implicit min/max count projection for primary-key columns.
