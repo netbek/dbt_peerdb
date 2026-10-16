@@ -1,6 +1,6 @@
 # bucketed_incremental Specification
 
-> Status: frozen v2 · approved 2026-10-02
+> **Status:** Approved. Last updated 2026-10-02.
 
 ## Purpose
 

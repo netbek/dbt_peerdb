@@ -1,6 +1,6 @@
 # bucketed_incremental Design
 
-> Status: v1 · last updated 2026-10-02
+> **Status:** Last updated 2026-10-02.
 
 ## Context
 
