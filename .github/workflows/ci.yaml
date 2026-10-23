@@ -20,6 +20,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+          version-file: pyproject.toml
 
       - name: Install Python dependencies
         run: uv sync --locked --all-extras --dev
@@ -52,6 +53,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+          version-file: pyproject.toml
 
       - name: Install Python dependencies
         run: uv sync --locked --all-extras --dev

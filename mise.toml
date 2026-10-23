@@ -6,7 +6,7 @@ python = "3.13"
 ripgrep = "latest"
 shellcheck = "latest"
 trivy = "latest"
-uv = "latest"
+uv = "0.13.5"
 zizmor = "latest"
 
 [settings]

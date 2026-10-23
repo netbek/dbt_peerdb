@@ -54,6 +54,7 @@ filterwarnings = [
 norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "dbt_packages", "vendor"]
 
 [tool.uv]
+required-version = ">=0.13.4"
 exclude-newer = "7 days"
-exclude-newer-package = { netbek-dw-lib = "0 days" }
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", netbek-dw-lib = "0 days" }
 python-preference = "only-managed"
