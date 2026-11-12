@@ -362,7 +362,7 @@ wheels = [
 
 [[package]]
 name = "dbt-peerdb"
-version = "0.0.21"
+version = "0.0.22"
 source = { virtual = "." }
 
 [package.dev-dependencies]
